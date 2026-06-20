@@ -486,12 +486,13 @@ EOF
             echo "  [saltado] no se proveyó contraseña para root"
         fi
     else
-        # Validar grupos
+        # Validar grupos dentro del chroot con getent
         local GROUP_LIST=() VALID_GROUPS=() g
         IFS=',' read -ra GROUP_LIST <<< "$GROUPS"
         for g in "${GROUP_LIST[@]}"; do
-            if grep -q "^${g}:" "$LFS/etc/group" 2>/dev/null; then
+            if chroot_run "getent group $g" >/dev/null 2>&1; then
                 VALID_GROUPS+=("$g")
+                echo "  [ok] grupo '$g' encontrado"
             else
                 echo "  [aviso] grupo '$g' no existe — ignorado"
             fi
@@ -540,7 +541,7 @@ cmd_grub() {
 Uso: neonatox-bootstrap [opciones] grub [opciones]
 
 Opciones:
-  -d, --device <disp>  Dispositivo donde instalar GRUB (default: auto desde fstab)
+  -d, --device <disp>  Dispositivo donde instalar GRUB (default: auto desde el punto de montaje)
   --efi                Modo UEFI (x86_64-efi), legacy por defecto
   --efi-dir <dir>      Directorio de la partición EFI (default: /boot)
   --reinstall          Pasar --reinstall a grub-install
@@ -553,23 +554,16 @@ EOF
 
     core_instalado || { echo "Error: ejecute 'core' primero." >&2; exit 1; }
 
-    # Detectar dispositivo desde fstab si no se proveyó
+    # Detectar dispositivo desde el punto de montaje
     if [[ -z "$DEVICE" ]]; then
-        local FSTAB_DEV PART
-        FSTAB_DEV=$(awk '$2=="/"{print $1}' "$LFS/etc/fstab" 2>/dev/null)
-        [[ -n "$FSTAB_DEV" ]] || { echo "Error: no se pudo detectar dispositivo desde /etc/fstab" >&2; exit 1; }
-
-        if [[ "$FSTAB_DEV" =~ ^UUID= ]]; then
-            local UUID="${FSTAB_DEV#UUID=}"
-            local BY_UUID="/dev/disk/by-uuid/$UUID"
-            if [[ -e "$BY_UUID" ]]; then
-                PART=$(readlink -f "$BY_UUID")
-            else
-                echo "Error: no se pudo resolver UUID=$UUID" >&2; exit 1
-            fi
-        else
-            PART="$FSTAB_DEV"
+        local PART
+        if command -v findmnt >/dev/null 2>&1; then
+            PART=$(findmnt -no SOURCE --target "$LFS" 2>/dev/null | sed 's/\[.*\]//' | tr -d '[:space:]')
         fi
+        if [[ -z "$PART" ]] || [[ ! -b "$PART" ]]; then
+            PART=$(df -P "$LFS" | awk 'NR==2{print $1}' | sed 's/\[.*\]//')
+        fi
+        [[ -n "$PART" ]] || { echo "Error: no se pudo detectar dispositivo desde $LFS" >&2; exit 1; }
         # /dev/sda3 -> /dev/sda , /dev/nvme0n1p2 -> /dev/nvme0n1
         DEVICE=$(echo "$PART" | sed 's/[0-9]*$//; s/p$//')
     fi
