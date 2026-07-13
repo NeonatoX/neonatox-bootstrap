@@ -89,6 +89,14 @@ if [[ "$MODE" == "core" ]]; then
     fi
 fi
 
+# Verificar que nhopkg esté disponible en el PATH
+if ! command -v nhopkg >/dev/null 2>&1; then
+    echo "Error: nhopkg no está instalado o no está en el PATH." >&2
+    echo "       nhopkg debe estar disponible en el sistema host para ejecutar neonatox-bootstrap." >&2
+    echo "       Instálelo desde https://github.com/cargabsj175/neonatox-nhopkg" >&2
+    exit 1
+fi
+
 # Marcadores de estado
 CORE_SENTINEL="${LFS}/var/nhopkg/.core-installed"
 DE_SENTINEL="${LFS}/var/nhopkg/.desktop-common-installed"
