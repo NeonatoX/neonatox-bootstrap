@@ -168,6 +168,32 @@ detect_base_disk() {
 }
 
 ##################################################
+#  Detectar partición EFI en el disco base
+##################################################
+detect_efi() {
+    [[ -n "$BASE_DISK" && -b "$BASE_DISK" ]] || return 1
+    command -v lsblk >/dev/null 2>&1 || return 1
+
+    local part mpoint fstype
+    while IFS= read -r line; do
+        part=$(echo "$line" | awk '{print $1}')
+        mpoint=$(echo "$line" | awk '{print $2}')
+        fstype=$(echo "$line" | awk '{print $3}')
+        [[ "$fstype" != "vfat" ]] && continue
+        [[ "$mpoint" != "$LFS"* ]] && continue
+
+        local rel="${mpoint#$LFS}"
+        [[ -z "$rel" ]] && rel="/"
+        echo "    [INFO] partición EFI detectada: /dev/$part montada en $mpoint"
+        EFI=1
+        EFI_DIR="$rel"
+        return 0
+    done < <(lsblk -ln -o NAME,MOUNTPOINT,FSTYPE "$BASE_DISK" 2>/dev/null | awk '$2!=""{print $0}')
+
+    return 1
+}
+
+##################################################
 #  Custom triggers — $LFS/var/nhopkg/triggers/*.sh
 ##################################################
 run_triggers() {
@@ -580,12 +606,12 @@ EOF
 #  GRUB installation
 ##################################################
 cmd_grub() {
-    local DEVICE="" EFI="" EFI_DIR="/boot" REINSTALL=""
+    local DEVICE="" EFI="" EFI_SET="" EFI_DIR="/boot" REINSTALL=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -d|--device) DEVICE="$2"; shift 2 ;;
-            --efi) EFI=1; shift ;;
+            --efi) EFI=1; EFI_SET=1; shift ;;
             --efi-dir) EFI_DIR="$2"; shift 2 ;;
             --reinstall) REINSTALL="--reinstall"; shift ;;
             -h|--help)
@@ -594,7 +620,7 @@ Uso: neonatox-bootstrap [opciones] grub [opciones]
 
 Opciones:
   -d, --device <disp>  Dispositivo donde instalar GRUB (default: auto desde el punto de montaje)
-  --efi                Modo UEFI (x86_64-efi), legacy por defecto
+  --efi                Modo UEFI (x86_64-efi). Si se omite, se auto-detecta
   --efi-dir <dir>      Directorio de la partición EFI (default: /boot)
   --reinstall          Pasar --reinstall a grub-install
   -h, --help           Mostrar esta ayuda
@@ -614,6 +640,11 @@ EOF
 
     [[ -b "$DEVICE" ]] || { echo "Error: $DEVICE no es un dispositivo de bloque" >&2; exit 1; }
     echo "  [ok] dispositivo: $DEVICE"
+
+    # Auto-detectar EFI si el usuario no forzó legacy ni EFI explícito
+    if [[ -z "$EFI_SET" ]]; then
+        detect_efi && echo "  [ok] modo UEFI auto-detectado" || echo "  [ok] modo legacy (sin EFI detectado)"
+    fi
 
     chroot_prepare
 
