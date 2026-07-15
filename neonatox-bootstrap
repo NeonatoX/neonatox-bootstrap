@@ -309,14 +309,16 @@ EOF
     fi
     echo "Dispositivo detectado: $DEV"
     if command -v blkid >/dev/null 2>&1; then
-        BLKID_OUT="$(blkid "$DEV" 2>/dev/null || true)"
-    elif command -v sudo >/dev/null 2>&1; then
-        BLKID_OUT="$(sudo blkid "$DEV" 2>/dev/null || true)"
-    else
-        BLKID_OUT=""
+        UUID="${UUID_OVERRIDE:-$(blkid -o value -s UUID "$DEV" 2>/dev/null)}"
+        FSTYPE="${FSTYPE_OVERRIDE:-$(blkid -o value -s TYPE "$DEV" 2>/dev/null)}"
+        # Fallback a sed parsing si -o value no es soportado (busybox antiguo)
+        if [[ -z "$UUID" ]]; then
+            local BLKID_OUT
+            BLKID_OUT="$(blkid "$DEV" 2>/dev/null || true)"
+            UUID="${UUID_OVERRIDE:-$(echo "$BLKID_OUT" | sed -n 's/.*UUID="\([^"]*\)".*/\1/p')}"
+            FSTYPE="${FSTYPE_OVERRIDE:-$(echo "$BLKID_OUT" | sed -n 's/.*TYPE="\([^"]*\)".*/\1/p')}"
+        fi
     fi
-    UUID="${UUID_OVERRIDE:-$(echo "$BLKID_OUT" | sed -n 's/.*UUID="\([^"]*\)".*/\1/p')}"
-    FSTYPE="${FSTYPE_OVERRIDE:-$(echo "$BLKID_OUT" | sed -n 's/.*TYPE="\([^"]*\)".*/\1/p')}"
     if [[ -z "$UUID" ]]; then
         echo "Error: No se pudo obtener UUID de $DEV" >&2
         exit 1
