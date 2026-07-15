@@ -97,6 +97,9 @@ if ! command -v nhopkg >/dev/null 2>&1; then
     exit 1
 fi
 
+# Variable global para el disco base (lo resuelve detect_base_disk)
+BASE_DISK=""
+
 # Marcadores de estado
 CORE_SENTINEL="${LFS}/var/nhopkg/.core-installed"
 DE_SENTINEL="${LFS}/var/nhopkg/.desktop-common-installed"
@@ -143,6 +146,25 @@ chroot_cleanup() {
 
 chroot_run() {
     chroot "$LFS" /bin/bash -c "$*"
+}
+
+##################################################
+#  Detectar disco base desde el punto de montaje
+##################################################
+detect_base_disk() {
+    local dev
+    if command -v findmnt >/dev/null 2>&1; then
+        dev=$(findmnt -no SOURCE --target "$LFS" 2>/dev/null | sed 's/\[.*\]//' | tr -d '[:space:]')
+    fi
+    if [[ -z "$dev" ]] || [[ ! -b "$dev" ]]; then
+        dev=$(df -P "$LFS" | awk 'NR==2{print $1}' | sed 's/\[.*\]//')
+    fi
+    if [[ ! -b "$dev" ]]; then
+        echo "Error: No se pudo detectar dispositivo desde $LFS" >&2
+        return 1
+    fi
+    BASE_DISK=$(echo "$dev" | sed 's/[0-9]*$//; s/p$//')
+    echo "Disco base detectado: $BASE_DISK (desde $dev)"
 }
 
 ##################################################
@@ -281,8 +303,8 @@ EOF
     fi
     # Detectar particiones swap en la misma unidad
     SWAP_ENTRIES=""
-    BASE_DISK=$(echo "$DEV" | sed 's/[0-9]*$//; s/p$//')
-    if [[ -b "$BASE_DISK" ]] && command -v lsblk >/dev/null 2>&1; then
+    detect_base_disk || true
+    if [[ -n "$BASE_DISK" && -b "$BASE_DISK" ]] && command -v lsblk >/dev/null 2>&1; then
         while IFS= read -r PART; do
             [[ -z "$PART" || "$PART" == "$(basename "$DEV")" ]] && continue
             PART_DEV="/dev/$PART"
@@ -584,18 +606,10 @@ EOF
 
     core_instalado || { echo "Error: ejecute 'core' primero." >&2; exit 1; }
 
-    # Detectar dispositivo desde el punto de montaje
+    # Detectar disco base desde el punto de montaje
     if [[ -z "$DEVICE" ]]; then
-        local PART
-        if command -v findmnt >/dev/null 2>&1; then
-            PART=$(findmnt -no SOURCE --target "$LFS" 2>/dev/null | sed 's/\[.*\]//' | tr -d '[:space:]')
-        fi
-        if [[ -z "$PART" ]] || [[ ! -b "$PART" ]]; then
-            PART=$(df -P "$LFS" | awk 'NR==2{print $1}' | sed 's/\[.*\]//')
-        fi
-        [[ -n "$PART" ]] || { echo "Error: no se pudo detectar dispositivo desde $LFS" >&2; exit 1; }
-        # /dev/sda3 -> /dev/sda , /dev/nvme0n1p2 -> /dev/nvme0n1
-        DEVICE=$(echo "$PART" | sed 's/[0-9]*$//; s/p$//')
+        detect_base_disk || { echo "Error: no se pudo detectar dispositivo desde $LFS" >&2; exit 1; }
+        DEVICE="$BASE_DISK"
     fi
 
     [[ -b "$DEVICE" ]] || { echo "Error: $DEVICE no es un dispositivo de bloque" >&2; exit 1; }
