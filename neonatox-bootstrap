@@ -196,34 +196,6 @@ detect_efi() {
 }
 
 ##################################################
-#  Custom triggers — $LFS/var/nhopkg/triggers/*.sh
-##################################################
-run_triggers() {
-    local TDIR="${LFS}/var/nhopkg/triggers"
-    local LOG="${PWD}/neonatox-triggers.log"
-
-    [[ -d "$TDIR" ]] || return 0
-
-    echo "=== [triggers] Ejecutando disparadores para ${section} ===" | tee -a "$LOG"
-
-    for t in "$TDIR"/*.sh; do
-        [[ -f "$t" ]] || continue
-        local name
-        name="$(basename "$t")"
-        echo "  -> ${name}" | tee -a "$LOG"
-        if chroot_run "bash /var/nhopkg/triggers/${name}" >> "$LOG" 2>&1; then
-            echo "  [ok] ${name}" | tee -a "$LOG"
-        else
-            echo "  [fallo] ${name} (codigo $?) — continuando" | tee -a "$LOG"
-        fi
-    done
-
-    echo "=== [triggers] - [${section}] Completo ===" | tee -a "$LOG"
-    rm -f "$TDIR"/*.sh
-    rmdir "$TDIR" 2>/dev/null || true
-}
-
-##################################################
 #  Install base system — 01-base-neonatox.sh
 ##################################################
 install_core() {
@@ -420,7 +392,6 @@ EOF
     
     echo "    [INFO] machine-id generado"
     
-
     echo "=== [core] Poblando BD de paquetes e instalando core ==="
     nhopkg --root "$LFS" -U
     nhopkg --root "$LFS" -RS nhopkg --no-check-deps
@@ -445,7 +416,6 @@ install_desktop_common() {
     # con el proposito de desktop-common lo activamos desde aqui
     chroot_prepare
     chroot_run "systemctl enable lightdm"
-    run_triggers
     chroot_cleanup
     
     touch "$DE_SENTINEL"
@@ -603,7 +573,6 @@ EOF
         fi
     fi
 
-    run_triggers
     chroot_cleanup
 }
 
@@ -661,7 +630,6 @@ EOF
 
     chroot_run "grub-mkconfig -o /boot/grub/grub.cfg"
 
-    run_triggers
     chroot_cleanup
 }
 
