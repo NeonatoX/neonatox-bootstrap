@@ -426,9 +426,6 @@ EOF
     nhopkg --root "$LFS" -RS nhopkg --no-check-deps
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/base") $(awk 'NF && !/^#/' "$PACKS_DIR/base-extra")
     nhopkg --root "$LFS" -RS grub --no-check-deps
-    #chroot_prepare
-    #run_triggers
-    #chroot_cleanup
     touch "$CORE_SENTINEL"
     echo "=== [core] Listo ==="
 }
@@ -444,10 +441,12 @@ install_desktop_common() {
     #Instalar paquetes de la seccion
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/desktop-common")
     
-    # chroot_prepare
-    # chroot_run "systemctl enable lightdm"
-    # run_triggers
-    # chroot_cleanup
+    # el servicio de lightdm no se activa a si mismo, asi que para cumplir
+    # con el proposito de desktop-common lo activamos desde aqui
+    chroot_prepare
+    chroot_run "systemctl enable lightdm"
+    run_triggers
+    chroot_cleanup
     
     touch "$DE_SENTINEL"
 }
@@ -473,12 +472,6 @@ install_kde() {
     
     #Instalar paquetes de la seccion
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/kde") $(awk 'NF && !/^#/' "$PACKS_DIR/kde-extra")
-    
-    # Disparadores en contexto chroot + limpieza
-    chroot_prepare
-    run_triggers
-    cleanup
-    chroot_cleanup
 }
 
 ##################################################
@@ -492,15 +485,9 @@ install_gnome() {
     
     section="Gnome"
     
-    #Instalar paquetes de la seccion
+    #Instalar paquetes de la seccion y remover innecesarios
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/gnome") $(awk 'NF && !/^#/' "$PACKS_DIR/gnome-extra")
     nhopkg --root "$LFS" -Rr qt5 qt6 > /dev/null 2>&1
-    
-    # Disparadores en contexto chroot + limpieza
-    #chroot_prepare
-    #run_triggers
-    #cleanup
-    #chroot_cleanup
 }
 
 ##################################################
@@ -514,15 +501,9 @@ install_xfce() {
     
     section="Xfce"
     
-    #Instalar paquetes de la seccion
+    #Instalar paquetes de la seccion y remover innecesarios
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/xfce") $(awk 'NF && !/^#/' "$PACKS_DIR/xfce-extra")
     nhopkg --root "$LFS" -Rr qt6 > /dev/null 2>&1
-    
-    # Disparadores en contexto chroot + limpieza
-    #chroot_prepare
-    #run_triggers
-    #cleanup
-    #chroot_cleanup
 }
 
 ##################################################
