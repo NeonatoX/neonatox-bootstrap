@@ -8,15 +8,15 @@
 
 Bootstrap scripts para [NeonatoX](https://neonatox.vegnux.com), una
 distribución Linux desde cero. Crea la jerarquía del sistema de archivos,
-compila e instala el gestor de paquetes `nhopkg`, genera la configuración
+instala `nhopkg` (gestor de paquetes propio), genera la configuración
 base, e instala los paquetes para los entornos de escritorio
 KDE / GNOME / XFCE.
 
 ## Uso rápido
 
 ```bash
-sudo ./neonatox-bootstrap -L /mnt core               # sistema base
-sudo ./neonatox-bootstrap -L /mnt -p mipassword kde  # KDE (host → chroot)
+sudo ./neonatox-bootstrap -L /mnt core    # sistema base
+sudo ./neonatox-bootstrap -L /mnt kde     # KDE (host → chroot)
 ```
 
 ### Argumentos
@@ -30,18 +30,19 @@ sudo ./neonatox-bootstrap -L /mnt -p mipassword kde  # KDE (host → chroot)
 | `--fstype <tipo>` | auto-detect | Tipo de sistema de archivos |
 | `-z, --timezone <zona>` | host o `America/Caracas` | Zona horaria |
 | `-l, --locale <locale>` | `es_US.UTF-8` | Locale del sistema |
-| `-p, --root-password <pass>` | — | Contraseña root (vía chpasswd) |
-| `--no-cleanup` | — | Salta `rm -rf /usr/src/* /var/nhopkg/cache/* /tmp/*` |
+| `--no-cleanup` | — | Salta limpieza post-instalación |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Listas de paquetes |
 
 ### Comandos
 
 | Comando | Contexto | Descripción |
 |---------|----------|-------------|
-| `core` | host (`nhopkg --root`) | Sistema base: directorios, nhopkg, config dinámica, paquetes core |
+| `core` | host (`nhopkg --root`) | Sistema base: directorios, nhopkg, config dinámica, paquetes base |
 | `kde` | host → chroot (`chroot_run`) | Escritorio KDE + desktop-common |
 | `gnome` | host → chroot (`chroot_run`) | Escritorio GNOME + desktop-common |
 | `xfce` | host → chroot (`chroot_run`) | Escritorio XFCE + desktop-common |
+| `user` | host → chroot | Crear usuario del sistema |
+| `grub` | host → chroot | Instalar GRUB |
 | `chroot` | host → chroot | Shell interactivo dentro de `$LFS` |
 
 ## Estructura
@@ -55,7 +56,7 @@ bootstrap/
     profile.d/
     skel/
   packs/                    # listas de paquetes (uno por línea)
-    core                    # paquetes base del sistema
+    base                    # paquetes base del sistema
     base-extra              # paquetes extra del sistema
     desktop-common          # paquetes comunes a todos los DE
     kde / kde-extra         # KF6+Plasma y apps KDE
@@ -66,20 +67,15 @@ FLUJO.md                    # diagrama de flujo y detalle paso a paso
 
 ## Requisitos
 
-- Linux con `chroot`, `mount --bind`, `git`, `meson`, `ninja`
+- Linux con `chroot`, `mount --bind`, `git`
 - `sudo` para `blkid` y `mount`
-- Conexión a internet para clonar nhopkg y descargar paquetes
+- Conexión a internet para descargar nhopkg y paquetes
 
 ## Flujo
 
 Ver [`FLUJO.md`](FLUJO.md) para el detalle paso a paso de cada comando,
 helpers de chroot (`chroot_prepare`, `chroot_run`, `chroot_cleanup`),
 diagrama de flujo y notas de ejecución.
-
-## Workflow btrfs
-
-Ver [`testing_neoanatox_btrfs`](testing_neoanatox_btrfs) para el flujo
-con subvolúmenes btrfs, snapshots y systemd-nspawn.
 
 ## Recursos
 
