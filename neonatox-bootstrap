@@ -33,6 +33,7 @@ Opciones globales:
   --fstype <tipo>       Tipo de sistema de archivos (detección automática)
   -z, --timezone <zona>     Zona horaria (default: detectada del host)
   -l, --locale <locale>     Locale (default: es_US.UTF-8)
+  --libc {glibc|musl}       Perfil de libc del target (default: glibc)
   --no-cleanup              Saltar limpieza post-instalación
   --pack-dir <ruta>         Directorio de archivos de paquetes
   -h, --help                Mostrar esta ayuda
@@ -53,6 +54,7 @@ while [[ $# -gt 0 ]]; do
         --fstype) FSTYPE_OVERRIDE="$2"; shift 2 ;;
         -z|--timezone) TZONE="$2"; shift 2 ;;
         -l|--locale) LOCALE="$2"; shift 2 ;;
+        --libc) LIBC="$2"; shift 2 ;;
         --no-cleanup) SKIP_CLEANUP=1; shift ;;
         --pack-dir) PACKS_DIR="$2"; shift 2 ;;
         -h|--help) show_help ;;
@@ -63,6 +65,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "$MODE" ]] && MODE="core"
+
+LIBC="${LIBC:-glibc}"
+[[ "$LIBC" == "glibc" || "$LIBC" == "musl" ]] || {
+    echo "Error: --libc debe ser 'glibc' o 'musl' (recibido: $LIBC)." >&2
+    exit 1
+}
 
 # Verificar que LFS no sea la raíz del host
 [[ "$LFS" != "/" ]] || {
@@ -89,13 +97,64 @@ if [[ "$MODE" == "core" ]]; then
     fi
 fi
 
-# Verificar que nhopkg esté disponible en el PATH
-if ! command -v nhopkg >/dev/null 2>&1; then
-    echo "Error: nhopkg no está instalado o no está en el PATH." >&2
-    echo "       nhopkg debe estar disponible en el sistema host para ejecutar neonatox-bootstrap." >&2
-    echo "       Instálelo desde https://github.com/cargabsj175/neonatox-nhopkg" >&2
-    exit 1
-fi
+##################################################
+#  nhopkg al vuelo (standalone)
+##################################################
+NH_TMP="/tmp/nhopkg-tools"
+NHOPKG_NEEDED_TOOLS=(wget curl grep sed awk sort tar zstd sha256sum)
+
+nhopkg_build_temp() {
+    [[ -x "$NH_TMP/usr/bin/nhopkg" ]] && return 0
+
+    local cmd
+    for cmd in git meson ninja; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            echo "Error: falta $cmd en el host para construir nhopkg temporal." >&2
+            echo "       Instálelo o deje nhopkg disponible en el PATH." >&2
+            exit 1
+        fi
+    done
+
+    local recipe=()
+    if [[ "$LIBC" == "musl" ]]; then
+        recipe=(-D binlocate=plocate -D repo-version=n27 -D repo-arch=x86_64-musl -D libc=musl -D git-branch=musl)
+    else
+        recipe=(-D repo-version=n2026 -D repo-arch=x86_64 -D git-branch=n2026)
+    fi
+
+    local tool missing=0
+    for tool in "${NHOPKG_NEEDED_TOOLS[@]}"; do
+        command -v "$tool" >/dev/null 2>&1 || missing=1
+    done
+
+    if [[ "$missing" == "1" ]]; then
+        echo "  [info] faltan tools en el host; habilitando BusyBox estático"
+        recipe+=(-D use-busybox=yes -D static-busybox=auto -D static-zstd=auto)
+    else
+        recipe+=(-D use-busybox=no -D static-busybox=no -D static-zstd=no)
+    fi
+
+    echo "=== [core] Construyendo nhopkg temporal ($LIBC) en $NH_TMP ==="
+    rm -rf /tmp/nhopkg
+    git clone --depth 1 https://github.com/cargabsj175/neonatox-nhopkg.git /tmp/nhopkg
+    pushd /tmp/nhopkg >/dev/null || exit 1
+    meson setup build \
+        --prefix="$NH_TMP/usr" \
+        --sysconfdir="$NH_TMP/etc" \
+        --localstatedir="$NH_TMP/var" \
+        "${recipe[@]}"
+    ninja -C build install
+    popd >/dev/null || exit 1
+}
+
+nhopkg_prepare() {
+    if ! command -v nhopkg >/dev/null 2>&1; then
+        nhopkg_build_temp
+        export PATH="$NH_TMP/usr/bin:$PATH"
+        export NHOPKG_CONF="$NH_TMP/etc/nhopkg/nhopkg.conf"
+        echo "  [ok] nhopkg temporal listo ($LIBC)"
+    fi
+}
 
 # Variables globales para detección de disco y EFI
 BASE_DISK=""
@@ -111,7 +170,7 @@ de_common_instalado() { [[ -f "$DE_SENTINEL" ]]; }
 # Limpieza al salir (error, Ctrl+C, fin normal)
 cleanup_all() {
     chroot_cleanup
-    rm -rf /tmp/nhopkg /tmp/nhopkg.zip 2>/dev/null || true
+    rm -rf /tmp/nhopkg /tmp/nhopkg.zip "$NH_TMP" 2>/dev/null || true
 }
 trap cleanup_all EXIT INT TERM
 
@@ -393,6 +452,7 @@ EOF
     echo "    [INFO] machine-id generado"
     
     echo "=== [core] Poblando BD de paquetes e instalando core ==="
+    nhopkg_prepare
     nhopkg --root "$LFS" -U
     nhopkg --root "$LFS" -RS nhopkg --no-check-deps
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/base") $(awk 'NF && !/^#/' "$PACKS_DIR/base-extra")
@@ -408,6 +468,8 @@ install_desktop_common() {
 	section="Desktop Common"
     # Verificar si esta instalada la seccion
     de_common_instalado && return 0
+    
+    nhopkg_prepare
     
     #Instalar paquetes de la seccion
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/desktop-common")
@@ -437,6 +499,7 @@ install_kde() {
     # Asegurar dependencias (core + desktop-common se saltan si ya instalados)
     core_instalado || install_core
     install_desktop_common
+    nhopkg_prepare
     
     section="KDE"
     
@@ -452,6 +515,7 @@ install_gnome() {
 	# Asegurar dependencias (core + desktop-common se saltan si ya instalados)
     core_instalado || install_core
     install_desktop_common
+    nhopkg_prepare
     
     section="Gnome"
     
@@ -468,6 +532,7 @@ install_xfce() {
     # Asegurar dependencias (core + desktop-common se saltan si ya instalados)
     core_instalado || install_core
     install_desktop_common
+    nhopkg_prepare
     
     section="Xfce"
     
