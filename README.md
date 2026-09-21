@@ -31,9 +31,11 @@ sudo ./neonatox-bootstrap --libc musl -L /mnt core
 # GNOME desktop on a musl target
 sudo ./neonatox-bootstrap --libc musl -L /mnt gnome
 
-# nhopkg is always built as a temporary tree (git+meson+ninja)
-# with the target recipe; if the host lacks some tool, the recipe
-# enables static BusyBox.
+# nhopkg is always built (git+meson+ninja) as a single tree with
+# the standard prefix (/usr /etc /var), installed into the target via
+# DESTDIR; it acts both as the host-side driver (libs resolved by env
+# inside $LFS) and as the final system nhopkg. If the host lacks some
+# tool, the recipe enables static BusyBox.
 sudo ./neonatox-bootstrap -L /mnt core
 ```
 
@@ -90,11 +92,18 @@ AGENTS.md                   # guide: usage, architecture and step-by-step flow
 - `sudo` for `blkid` and `mount`
 - Internet connection to download nhopkg and packages
 - **nhopkg is always built** — the system one is **never used**: its
-  config belongs to the host flavor, not the target. A temporary tree in
-  `/tmp/nhopkg-tools` is generated (`git`, `meson` and `ninja` required)
-  with the recipe for the selected `--libc`; its generated config points
-  at the correct target repositories. If the host lacks some tool, the
-  recipe enables static BusyBox automatically.
+  config belongs to the host flavor, not the target. A **single tree**
+  (`git`, `meson` and `ninja` required) is built with the recipe for the
+  selected `--libc` and installed into `$LFS` with the standard prefix
+  (`--prefix=/usr --sysconfdir=/etc --localstatedir=/var`) via `DESTDIR`:
+  1. It is the **host-side driver** during bootstrap — the libs/conf are
+     resolved by env (`NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
+     `NHOPKG_DOWNLOAD_LIB`, `NHOPKG_CRYPTO_LIB`) pointing inside `$LFS`,
+     so it operates on `--root $LFS`.
+  2. It is the **final system nhopkg** — the baked `/usr`/`/etc`/`/var`
+     paths are correct at boot, replacing the `nhopkg` package.
+  If the host lacks some tool, the recipe enables static BusyBox
+  automatically.
 
 ## Flow
 

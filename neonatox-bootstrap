@@ -98,23 +98,11 @@ if [[ "$MODE" == "core" ]]; then
 fi
 
 ##################################################
-#  nhopkg al vuelo (standalone)
+#  nhopkg: build único en el target (driver del host + nhopkg final)
 ##################################################
-NH_TMP="/tmp/nhopkg-tools"
 NHOPKG_NEEDED_TOOLS=(wget curl grep sed awk sort tar zstd sha256sum)
 
-nhopkg_build_temp() {
-    [[ -x "$NH_TMP/usr/bin/nhopkg" ]] && return 0
-
-    local cmd
-    for cmd in git meson ninja; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            echo "Error: falta $cmd en el host para construir nhopkg temporal." >&2
-            echo "       Instálelo o deje nhopkg disponible en el PATH." >&2
-            exit 1
-        fi
-    done
-
+nhopkg_probe_recipe() {
     local recipe=()
     if [[ "$LIBC" == "musl" ]]; then
         recipe=(-D binlocate=plocate -D repo-version=n27 -D repo-arch=x86_64-musl -D libc=musl -D git-branch=musl)
@@ -134,24 +122,70 @@ nhopkg_build_temp() {
         recipe+=(-D use-busybox=no -D static-busybox=no -D static-zstd=no)
     fi
 
-    echo "=== [core] Construyendo nhopkg temporal ($LIBC) en $NH_TMP ==="
-    rm -rf /tmp/nhopkg
-    git clone --depth 1 https://github.com/cargabsj175/neonatox-nhopkg.git /tmp/nhopkg
-    pushd /tmp/nhopkg >/dev/null || exit 1
-    meson setup build \
-        --prefix="$NH_TMP/usr" \
-        --sysconfdir="$NH_TMP/etc" \
-        --localstatedir="$NH_TMP/var" \
-        "${recipe[@]}"
-    ninja -C build install
-    popd >/dev/null || exit 1
+    NHOPKG_RECIPE=("${recipe[@]}")
 }
 
+nhopkg_require_build_tools() {
+    local cmd
+    for cmd in git meson ninja; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            echo "Error: falta $cmd en el host para construir nhopkg." >&2
+            echo "       Instálelo (git, meson, ninja) o use un prebuilt (futuro)." >&2
+            exit 1
+        fi
+    done
+}
+
+nhopkg_clone() {
+    if [[ ! -d /tmp/nhopkg/.git ]]; then
+        rm -rf /tmp/nhopkg
+        git clone --depth 1 https://github.com/cargabsj175/neonatox-nhopkg.git /tmp/nhopkg
+    fi
+}
+
+# nhopkg se construye SIEMPRE desde fuente en el host con el prefix estándar
+# (/usr, /etc, /var) y se instala de una sola vez en el target vía DESTDIR.
+# Ese único árbol, ya dentro de $LFS, cumple dos roles:
+#   - nhopkg final del sistema: rutas horneadas correctas (/usr, /etc, /var).
+#   - driver del host durante el bootstrap: se ejecuta desde $LFS exportando
+#     por env sus rutas (libs, conf) apuntando dentro de $LFS, gracias a que
+#     nhopkg respeta NHOPKG_LIB, NHOPKG_UDEP_LIB, NHOPKG_DOWNLOAD_LIB,
+#     NHOPKG_CRYPTO_LIB, NHOPKG_BB_DIR y NHOPKG_BB_SETUP por entorno.
+# Se reconstruye si cambia el --libc (marcador .libc-$LIBC).
+nhopkg_build() {
+    local marker="$LFS/etc/nhopkg/.libc-$LIBC"
+    if [[ -x "$LFS/usr/bin/nhopkg" && -f "$marker" ]]; then
+        return 0
+    fi
+    nhopkg_probe_recipe
+    nhopkg_require_build_tools
+    nhopkg_clone
+    echo "=== [core] Construyendo e instalando nhopkg ($LIBC) en $LFS ==="
+    pushd /tmp/nhopkg >/dev/null || exit 1
+    rm -rf build
+    meson setup build \
+        --prefix=/usr \
+        --sysconfdir=/etc \
+        --localstatedir=/var \
+        "${NHOPKG_RECIPE[@]}"
+    DESTDIR="$LFS" ninja -C build install
+    popd >/dev/null || exit 1
+    touch "$marker"
+}
+
+# Prepara el entorno del host para usar el nhopkg del target como driver
+# operando sobre --root $LFS (exporta conf y libs apuntando a $LFS).
 nhopkg_prepare() {
-    nhopkg_build_temp
-    export PATH="$NH_TMP/usr/bin:$PATH"
-    export NHOPKG_CONF="$NH_TMP/etc/nhopkg/nhopkg.conf"
-    echo "  [ok] nhopkg temporal listo ($LIBC)"
+    nhopkg_build
+    export PATH="$LFS/usr/bin:$PATH"
+    export NHOPKG_CONF="$LFS/etc/nhopkg/nhopkg.conf"
+    export NHOPKG_LIB="$LFS/usr/lib/nhopkg/libnhopkg"
+    export NHOPKG_UDEP_LIB="$LFS/usr/lib/nhopkg/libnhopkg_udepsys"
+    export NHOPKG_DOWNLOAD_LIB="$LFS/usr/lib/nhopkg/libnhopkg_download"
+    export NHOPKG_CRYPTO_LIB="$LFS/usr/lib/nhopkg/libnhopkg_crypto"
+    export NHOPKG_BB_DIR="$LFS/usr/lib/nhopkg/bin"
+    export NHOPKG_BB_SETUP="$LFS/usr/lib/nhopkg/nhopkg-bb-setup"
+    echo "  [ok] nhopkg listo ($LIBC)"
 }
 
 # Variables globales para detección de disco y EFI
@@ -168,7 +202,7 @@ de_common_instalado() { [[ -f "$DE_SENTINEL" ]]; }
 # Limpieza al salir (error, Ctrl+C, fin normal)
 cleanup_all() {
     chroot_cleanup
-    rm -rf /tmp/nhopkg /tmp/nhopkg.zip "$NH_TMP" 2>/dev/null || true
+    rm -rf /tmp/nhopkg /tmp/nhopkg.zip 2>/dev/null || true
 }
 trap cleanup_all EXIT INT TERM
 
@@ -452,7 +486,8 @@ EOF
     echo "=== [core] Poblando BD de paquetes e instalando core ==="
     nhopkg_prepare
     nhopkg --root "$LFS" -U
-    nhopkg --root "$LFS" -RS nhopkg --no-check-deps
+    nhopkg --root "$LFS" -RS busybox
+    ln -svf busybox "$LFS"/usr/bin/sh # acceso temprano a sh luego bash reemplazara ese enlace
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/base") $(awk 'NF && !/^#/' "$PACKS_DIR/base-extra")
     nhopkg --root "$LFS" -RS grub --no-check-deps
     touch "$CORE_SENTINEL"

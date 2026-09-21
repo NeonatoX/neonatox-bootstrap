@@ -29,9 +29,11 @@ sudo ./neonatox-bootstrap --libc musl -L /mnt core
 # Escritorio GNOME sobre un target musl
 sudo ./neonatox-bootstrap --libc musl -L /mnt gnome
 
-# nhopkg se construye siempre como árbol temporal (git+meson+ninja)
-# con la receta del target; si el host no tiene alguna tool, la receta
-# habilita BusyBox estático.
+# nhopkg se construye siempre (git+meson+ninja) como un único árbol
+# con el prefix estándar (/usr /etc /var), instalado en el target vía
+# DESTDIR; sirve de driver del host (libs resueltas por env hacia el
+# interior de $LFS) y de nhopkg final del sistema. Si el host no tiene
+# alguna tool, la receta habilita BusyBox estático.
 sudo ./neonatox-bootstrap -L /mnt core
 ```
 
@@ -46,7 +48,7 @@ sudo ./neonatox-bootstrap -L /mnt core
 | `--fstype <tipo>` | auto-detect | Tipo de sistema de archivos |
 | `-z, --timezone <zona>` | host o `America/Caracas` | Zona horaria |
 | `-l, --locale <locale>` | `es_US.UTF-8` | Locale del sistema |
-| `--libc {glibc\|musl}` | `glibc` | Perfil de libc del target (receta de nhopkg temporal) |
+| `--libc {glibc\|musl}` | `glibc` | Perfil de libc del target (receta de nhopkg) |
 | `--no-cleanup` | — | Salta limpieza post-instalación |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Listas de paquetes |
 
@@ -88,11 +90,19 @@ AGENTS.md                   # guía: uso, arquitectura y flujo paso a paso
 - `sudo` para `blkid` y `mount`
 - Conexión a internet para descargar nhopkg y paquetes
 - **nhopkg se construye siempre** — el del sistema **no se usa**: su
-  config corresponde al flavor del host, no al del target. Un árbol
-  temporal en `/tmp/nhopkg-tools` se genera (`git`, `meson` y `ninja`
-  requeridos) con la receta del `--libc` elegido, cuya config generada
-  apunta a los repos correctos del target. Si falta alguna tool en el
-  host, la receta activa BusyBox estático automáticamente.
+  config corresponde al flavor del host, no al del target. Se genera **un
+  único árbol** (`git`, `meson` y `ninja` requeridos) con la receta del
+  `--libc` elegido, instalado en `$LFS` vía `DESTDIR` con el prefix
+  estándar (`--prefix=/usr --sysconfdir=/etc --localstatedir=/var`):
+  1. Es el **driver del host** durante el bootstrap — las libs y la conf
+     se resuelven por env (`NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
+     `NHOPKG_DOWNLOAD_LIB`, `NHOPKG_CRYPTO_LIB`) apuntando al interior de
+     `$LFS`, así opera sobre `--root $LFS`.
+  2. Es el **nhopkg final del sistema** — las rutas horneadas
+     `/usr`/`/etc`/`/var` son las correctas en boot, sustituyendo al
+     paquete `nhopkg`.
+  Si falta alguna tool en el host, la receta activa BusyBox estático
+  automáticamente.
 
 ## Flujo
 

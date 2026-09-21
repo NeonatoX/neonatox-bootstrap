@@ -87,18 +87,27 @@ sudo ./neonatox-bootstrap grub --efi -L /mnt
 
 - **`core`** crea la jerarquía de directorios, copia `bootstrap/data/etc/*`,
   genera la config dinámica (`fstab`, `hostname`, `machine-id`, timezone),
-  puebla la BD de nhopkg e instala los packs base/base-extra (más `nhopkg`
-  y `grub`).
+  puebla la BD de nhopkg, construye e instala nhopkg en el target y
+  despliega los packs base/base-extra (más `grub`).
 - **DE (`kde`/`gnome`/`xfce`)** instalan `desktop-common` + el pack del DE,
   ejecutan `systemctl enable lightdm` en chroot y limpian.
   - GNOME además elimina qt5/qt6; XFCE elimina qt6.
-- **nhopkg se construye siempre como árbol temporal en el host.** El
-  nhopkg del sistema **no se usa**: su config corresponde al flavor del
-  host, no al del target, así que no garantiza los repos del `--libc`
-  elegido. `nhopkg_prepare()` construye (o recupera) `/tmp/nhopkg-tools`
-  con la receta meson del `--libc` (ver
-  [nhopkg al vuelo](#nhopkg-al-vuelo-driver-del-host));
-  si el árbol ya existe, se reutiliza.
+- **nhopkg se construye siempre desde fuente en el host.** El nhopkg del
+  sistema **no se usa**: su config corresponde al flavor del host, no al
+  del target, así que no garantiza los repos del `--libc` elegido. Se
+  genera **un único árbol** con meson (ver
+  [nhopkg al vuelo](#nhopkg-al-vuelo-driver-del-host)):
+  - **`nhopkg_build()`** hornea la receta con el **prefix estándar**
+    (`--prefix=/usr --sysconfdir=/etc --localstatedir=/var`) y lo instala
+    en `$LFS` vía `DESTDIR`, simulando una instalación normal. Ese único
+    árbol sirve de driver del host durante el bootstrap y de nhopkg final
+    del sistema (rutas `/usr`, `/etc`, `/var` correctas en boot);
+    sustituye al paquete `nhopkg`. Se reconstruye si cambia el `--libc`.
+  - **Driver del host** = el mismo nhopkg de `$LFS`, ejecutado desde el
+    host con `nhopkg_prepare()`: antepone `$LFS/usr/bin` al `PATH` y
+    exporta `NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
+    `NHOPKG_DOWNLOAD_LIB` y `NHOPKG_CRYPTO_LIB` apuntando a `$LFS`
+    (nhopkg respeta esas rutas por entorno, sin paths horneados del host).
 - **Sentinels** (`/var/nhopkg/.core-installed`,
   `/var/nhopkg/.desktop-common-installed`) evitan reinstalaciones.
 
@@ -124,38 +133,47 @@ sudo ./neonatox-bootstrap grub --efi -L /mnt
 3. **Symlinks del sistema** — `awk → gawk`, `sh → bash`, `mtab`
 4. **Metadata de nhopkg** — `mkdir -p $LFS/var/nhopkg/{cache,files,logs,packages,repo}`
 5. **Archivos dinámicos** — `fstab` (blkid), `hosts`/`hostname` (DMI+random), timezone (host), `machine-id`
-6. **Paquetes core** — `nhopkg --root $LFS -U` (poblar BD), `-RS nhopkg --no-check-deps`, `-RS base base-extra`, `-RS grub --no-check-deps`
-7. **Sentinel** — se crea `$LFS/var/nhopkg/.core-installed`
+6. **Paquetes core** — `nhopkg --root $LFS -U` (poblar BD), `-RS busybox` (+ symlink `sh → busybox` para acceso temprano al shell), `-RS base base-extra`, `-RS grub --no-check-deps`
+7. **nhopkg final en el target** — el tree único de `nhopkg_build()` ya quedó en `$LFS` con prefix estándar `/usr`/`/etc`/`/var`, sustituyendo al paquete `nhopkg`
+8. **Sentinel** — se crea `$LFS/var/nhopkg/.core-installed`
 
-Todo se ejecuta directamente sobre `$LFS` con `nhopkg --root`.
+Todo lo anterior se ejecuta directamente sobre `$LFS` con `nhopkg --root`,
+usando como driver el nhopkg instalado dentro de `$LFS`.
 
 ### nhopkg al vuelo (driver del host)
 
 `neonatox-bootstrap` construye **siempre** su propio nhopkg: el del
 sistema no se usa porque su config corresponde al flavor del host, no al
-del target. Antes del primer uso se llama `nhopkg_prepare()`, que:
+del target. `nhopkg_build()` hornea **un único árbol** con el prefix
+estándar y lo instala en el target vía `DESTDIR`:
 
-1. **Build temporal** — receta meson del `--libc` elegido en
-   `/tmp/nhopkg-tools` (se antepone su `bin` al `PATH` y se exporta
-   `NHOPKG_CONF` al conf generado del propio árbol). Si el árbol ya
-   existe, se reutiliza (no se recompila):
+1. **Build único en el target** — `nhopkg_build()` corre meson con
+   `--prefix=/usr --sysconfdir=/etc --localstatedir=/var` + `DESTDIR=$LFS`,
+   simulando una instalación normal directamente dentro de `$LFS` (marker
+   `.libc-$LIBC` en `$LFS/etc/nhopkg/`). Requiere `git`, `meson` y `ninja`
+   del host (no se instalan en el target). Por la receta del `--libc`:
    - `glibc`: `repo-version=n2026`, `repo-arch=x86_64`, `git-branch=n2026`
    - `musl`: `binlocate=plocate`, `repo-version=n27`,
      `repo-arch=x86_64-musl`, `libc=musl`, `git-branch=musl`
-   - Sin BusyBox por defecto (`use-busybox=no`); si al host le falta
-     `wget`/`curl`, `grep`, `sed`, `awk`, `sort`, `tar`, `zstd` o
-     `sha256sum`, la receta añade `use-busybox=yes` +
-     `static-busybox=auto` + `static-zstd=auto` (para ambos libc).
-   - Requiere `git`, `meson` y `ninja` del host (no se instalan en el
-     target).
-   - El conf generado queda **horneado** en
-     `$NH_TMP/etc/nhopkg/nhopkg.conf` (vía `--sysconfdir` del build), así
-     que nhopkg lo resuelve por defecto; `NHOPKG_CONF` se exporta por
-     robustez.
-2. Si el build falla → error claro con las vías (instalar `git`/`meson`/
+2. **Driver del host** — `nhopkg_prepare()` reusa ese mismo nhopkg ya
+   instalado en `$LFS`, sin recompilar. Para ejecutarlo desde el host
+   operando sobre `--root $LFS`, antepone `$LFS/usr/bin` al `PATH` y
+   exporta `NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
+   `NHOPKG_DOWNLOAD_LIB`, `NHOPKG_CRYPTO_LIB` (y `NHOPKG_BB_DIR` /
+   `NHOPKG_BB_SETUP`) apuntando dentro de `$LFS`. nhopkg respeta esas
+   rutas por entorno (las libs y la conf se resuelven por `$VAR` o
+   fallback horneado), así que el árbol único sirve de driver y de nhopkg
+   final del sistema sin paths duplicados.
+3. Sin BusyBox por defecto (`use-busybox=no`); si al host le falta
+   `wget`/`curl`, `grep`, `sed`, `awk`, `sort`, `tar`, `zstd` o
+   `sha256sum`, la receta añade `use-busybox=yes` +
+   `static-busybox=auto` + `static-zstd=auto` (para ambos libc).
+   Sustituye al paquete `nhopkg` (`-RS nhopkg --no-check-deps`).
+4. Si el build falla → error claro con las vías (instalar `git`/`meson`/
    `ninja` o usar un descargable prebuilt por flavor — futuro).
 
-El cleanup final borra `/tmp/nhopkg-tools`.
+El cleanup final borra el clon en `/tmp/nhopkg`, pero **conserva** el
+nhopkg ya instalado en `$LFS/usr`.
 
 ### Flujo: DE (kde / gnome / xfce)
 
@@ -197,7 +215,8 @@ neonatox-bootstrap
     ├── core (host)      → mkdir → cp data/etc → symlinks →
     │                      metadata nhopkg → archivos dinámicos
     │                      (fstab, hostname, timezone, machine-id)
-    │                      → nhopkg_prepare → -U → -RS packs → sentinel
+    │                      → nhopkg_build/prepare (tree único) → -U →
+    │                      -RS packs → sentinel
     │
     ├── user/grub (host→chroot)
     │                      verificar sentinel core → chroot_prepare →
