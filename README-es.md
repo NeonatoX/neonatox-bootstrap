@@ -29,9 +29,9 @@ sudo ./neonatox-bootstrap --libc musl -L /mnt core
 # Escritorio GNOME sobre un target musl
 sudo ./neonatox-bootstrap --libc musl -L /mnt gnome
 
-# Sin nhopkg preinstalado: se construye un nhopkg temporal automáticamente
-# (git+meson+ninja) con el perfil del target; si el host no tiene alguna
-# tool, la receta habilita BusyBox estático.
+# nhopkg se construye siempre como árbol temporal (git+meson+ninja)
+# con la receta del target; si el host no tiene alguna tool, la receta
+# habilita BusyBox estático.
 sudo ./neonatox-bootstrap -L /mnt core
 ```
 
@@ -87,11 +87,12 @@ AGENTS.md                   # guía: uso, arquitectura y flujo paso a paso
 - Linux con `chroot`, `mount --bind`
 - `sudo` para `blkid` y `mount`
 - Conexión a internet para descargar nhopkg y paquetes
-- **nhopkg no necesita estar preinstalado**: se usa el del host si existe
-  (NeonatoX, distro con nhopkg, ISO de live-boot) y, si no, se construye
-  uno temporal (`git`, `meson` y `ninja` requeridos) con la receta del
-  `--libc` elegido. Si falta alguna tool en el host, la receta activa
-  BusyBox estático automáticamente.
+- **nhopkg se construye siempre** — el del sistema **no se usa**: su
+  config corresponde al flavor del host, no al del target. Un árbol
+  temporal en `/tmp/nhopkg-tools` se genera (`git`, `meson` y `ninja`
+  requeridos) con la receta del `--libc` elegido, cuya config generada
+  apunta a los repos correctos del target. Si falta alguna tool en el
+  host, la receta activa BusyBox estático automáticamente.
 
 ## Flujo
 

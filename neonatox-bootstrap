@@ -148,12 +148,10 @@ nhopkg_build_temp() {
 }
 
 nhopkg_prepare() {
-    if ! command -v nhopkg >/dev/null 2>&1; then
-        nhopkg_build_temp
-        export PATH="$NH_TMP/usr/bin:$PATH"
-        export NHOPKG_CONF="$NH_TMP/etc/nhopkg/nhopkg.conf"
-        echo "  [ok] nhopkg temporal listo ($LIBC)"
-    fi
+    nhopkg_build_temp
+    export PATH="$NH_TMP/usr/bin:$PATH"
+    export NHOPKG_CONF="$NH_TMP/etc/nhopkg/nhopkg.conf"
+    echo "  [ok] nhopkg temporal listo ($LIBC)"
 }
 
 # Variables globales para detección de disco y EFI

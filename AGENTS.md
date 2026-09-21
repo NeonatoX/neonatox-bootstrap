@@ -92,13 +92,13 @@ sudo ./neonatox-bootstrap grub --efi -L /mnt
 - **DE (`kde`/`gnome`/`xfce`)** instalan `desktop-common` + el pack del DE,
   ejecutan `systemctl enable lightdm` en chroot y limpian.
   - GNOME además elimina qt5/qt6; XFCE elimina qt6.
-- **nhopkg NO es requisito del host.** Antes del primer uso,
-  `nhopkg_prepare()` elige el primero que valide (falla-adelante):
-  1. **Host con nhopkg** (`command -v nhopkg`) → se usa tal cual
-     (NeonatoX, una distro con nhopkg, o una ISO de live-boot con nhopkg
-     inyectado).
-  2. **Build temporal** en `/tmp/nhopkg-tools` con la receta meson del
-     `--libc` (ver [nhopkg al vuelo](#nhopkg-al-vuelo-driver-del-host)).
+- **nhopkg se construye siempre como árbol temporal en el host.** El
+  nhopkg del sistema **no se usa**: su config corresponde al flavor del
+  host, no al del target, así que no garantiza los repos del `--libc`
+  elegido. `nhopkg_prepare()` construye (o recupera) `/tmp/nhopkg-tools`
+  con la receta meson del `--libc` (ver
+  [nhopkg al vuelo](#nhopkg-al-vuelo-driver-del-host));
+  si el árbol ya existe, se reutiliza.
 - **Sentinels** (`/var/nhopkg/.core-installed`,
   `/var/nhopkg/.desktop-common-installed`) evitan reinstalaciones.
 
@@ -131,14 +131,14 @@ Todo se ejecuta directamente sobre `$LFS` con `nhopkg --root`.
 
 ### nhopkg al vuelo (driver del host)
 
-`neonatox-bootstrap` ya no exige nhopkg preinstalado. Antes del primer uso
-se llama `nhopkg_prepare()`, que usa el primero que valide:
+`neonatox-bootstrap` construye **siempre** su propio nhopkg: el del
+sistema no se usa porque su config corresponde al flavor del host, no al
+del target. Antes del primer uso se llama `nhopkg_prepare()`, que:
 
-1. **Host ya tiene nhopkg** (`command -v nhopkg`) → se usa tal cual
-   (NeonatoX, distro con nhopkg o ISO de live-boot con nhopkg inyectado).
-2. **Build temporal** — receta meson del `--libc` elegido en
+1. **Build temporal** — receta meson del `--libc` elegido en
    `/tmp/nhopkg-tools` (se antepone su `bin` al `PATH` y se exporta
-   `NHOPKG_CONF` al conf generado del propio árbol):
+   `NHOPKG_CONF` al conf generado del propio árbol). Si el árbol ya
+   existe, se reutiliza (no se recompila):
    - `glibc`: `repo-version=n2026`, `repo-arch=x86_64`, `git-branch=n2026`
    - `musl`: `binlocate=plocate`, `repo-version=n27`,
      `repo-arch=x86_64-musl`, `libc=musl`, `git-branch=musl`
@@ -152,8 +152,8 @@ se llama `nhopkg_prepare()`, que usa el primero que valide:
      `$NH_TMP/etc/nhopkg/nhopkg.conf` (vía `--sysconfdir` del build), así
      que nhopkg lo resuelve por defecto; `NHOPKG_CONF` se exporta por
      robustez.
-3. Si nada funciona → error claro con las vías (instalar nhopkg /
-   compilar).
+2. Si el build falla → error claro con las vías (instalar `git`/`meson`/
+   `ninja` o usar un descargable prebuilt por flavor — futuro).
 
 El cleanup final borra `/tmp/nhopkg-tools`.
 
