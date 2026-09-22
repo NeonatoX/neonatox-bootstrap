@@ -353,8 +353,6 @@ EOF
     fi
 
     echo "=== [core] Enlaces simbólicos del sistema ==="
-    ln -sf gawk "${LFS}/usr/bin/awk" > /dev/null 2>&1
-    ln -sf bash "${LFS}/usr/bin/sh" > /dev/null 2>&1
     ln -sf /proc/self/mounts "${LFS}/etc/mtab"
 
     echo "=== [core] Creando directorios para metadata de nhopkg ==="
@@ -487,7 +485,9 @@ EOF
     nhopkg_prepare
     nhopkg --root "$LFS" -U
     nhopkg --root "$LFS" -RS busybox
-    ln -svf busybox "$LFS"/usr/bin/sh # acceso temprano a sh luego bash reemplazara ese enlace
+    ln -sf busybox "${LFS}/usr/bin/awk" > /dev/null 2>&1
+    ln -sf busybox "${LFS}/usr/bin/sh" > /dev/null 2>&1
+    ln -sf busybox "${LFS}/usr/bin/sed" > /dev/null 2>&1
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/base") $(awk 'NF && !/^#/' "$PACKS_DIR/base-extra")
     nhopkg --root "$LFS" -RS grub --no-check-deps
     touch "$CORE_SENTINEL"
