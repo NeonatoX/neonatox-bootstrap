@@ -1,0 +1,9 @@
+0.2.0 (2026-09-22)
+--------------------------------
+* feat: nhopkg al vuelo (standalone) con --libc {glibc|musl} y fallback BusyBox
+* feat: nhopkg como árbol único en el target (driver del host + nhopkg final)
+* fix: nhopkg del sistema no se usa; siempre construir el árbol temporal
+* fix: symlinks awk/sh/sed a busybox tras instalar core, no antes
+* refactor: remove obsolete chroot helpers from DE installs
+* run_triggers is no longer necessary; nhopkg --root already does all the work
+* docs: fusionar AGENTS.md+FLUJO.md, dividir README en es/en y publicar AGENTS.md
