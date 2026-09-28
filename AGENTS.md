@@ -65,6 +65,7 @@ neonatox-bootstrap [--lfs <dir>] [opciones] <comando>
 | `-z, --timezone <zona>` | host o `America/Caracas` | Zona horaria |
 | `-l, --locale <locale>` | `es_US.UTF-8` | Locale del sistema |
 | `--libc {glibc\|musl}` | `glibc` | Perfil de libc del target (receta de nhopkg temporal) |
+| `--no-busybox` | — | Construye nhopkg sin BusyBox estático (PATH privado) |
 | `--no-cleanup` | — | Salta `rm -rf /usr/src/* /tmp/*` al final |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Directorio de listas de paquetes |
 | `-h, --help` | — | Muestra la ayuda |
@@ -102,10 +103,12 @@ sudo ./neonatox-bootstrap grub --efi -L /mnt
     en `$LFS` vía `DESTDIR`, simulando una instalación normal. Ese único
     árbol sirve de driver del host durante el bootstrap y de nhopkg final
     del sistema (rutas `/usr`, `/etc`, `/var` correctas en boot);
-    sustituye al paquete `nhopkg`. Se reconstruye si cambia el `--libc`.
+     sustituye al paquete `nhopkg`. Se reconstruye si cambian el `--libc` o
+     el estado de BusyBox (`--no-busybox`).
   - **Driver del host** = el mismo nhopkg de `$LFS`, ejecutado desde el
-    host con `nhopkg_prepare()`: antepone `$LFS/usr/bin` al `PATH` y
-    exporta `NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
+    host con `nhopkg_prepare()`: antepone `$LFS/usr/bin` (y
+    `$LFS/usr/lib/nhopkg/bin` si hay BusyBox) al `PATH` y exporta
+    `NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
     `NHOPKG_DOWNLOAD_LIB` y `NHOPKG_CRYPTO_LIB` apuntando a `$LFS`
     (nhopkg respeta esas rutas por entorno, sin paths horneados del host).
 - **Sentinels** (`/var/nhopkg/.core-installed`,
@@ -150,7 +153,8 @@ estándar y lo instala en el target vía `DESTDIR`:
 1. **Build único en el target** — `nhopkg_build()` corre meson con
    `--prefix=/usr --sysconfdir=/etc --localstatedir=/var` + `DESTDIR=$LFS`,
    simulando una instalación normal directamente dentro de `$LFS` (marker
-   `.libc-$LIBC` en `$LFS/etc/nhopkg/`). Requiere `git`, `meson` y `ninja`
+   `.libc-$LIBC-bb{yes,no}` en `$LFS/etc/nhopkg/`; se reconstruye si cambia
+   el `--libc` o el estado de BusyBox). Requiere `git`, `meson` y `ninja`
    del host (no se instalan en el target). Por la receta del `--libc`:
    - `glibc`: `repo-version=n2026`, `repo-arch=x86_64`, `git-branch=n2026`
    - `musl`: `binlocate=plocate`, `repo-version=n27`,
@@ -159,17 +163,38 @@ estándar y lo instala en el target vía `DESTDIR`:
    instalado en `$LFS`, sin recompilar. Para ejecutarlo desde el host
    operando sobre `--root $LFS`, antepone `$LFS/usr/bin` al `PATH` y
    exporta `NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
-   `NHOPKG_DOWNLOAD_LIB`, `NHOPKG_CRYPTO_LIB` (y `NHOPKG_BB_DIR` /
-   `NHOPKG_BB_SETUP`) apuntando dentro de `$LFS`. nhopkg respeta esas
-   rutas por entorno (las libs y la conf se resuelven por `$VAR` o
-   fallback horneado), así que el árbol único sirve de driver y de nhopkg
-   final del sistema sin paths duplicados.
-3. Sin BusyBox por defecto (`use-busybox=no`); si al host le falta
-   `wget`/`curl`, `grep`, `sed`, `awk`, `sort`, `tar`, `zstd` o
-   `sha256sum`, la receta añade `use-busybox=yes` +
-   `static-busybox=auto` + `static-zstd=auto` (para ambos libc).
+   `NHOPKG_DOWNLOAD_LIB` y `NHOPKG_CRYPTO_LIB` apuntando dentro de `$LFS`.
+   nhopkg respeta esas rutas por entorno (las libs y la conf se resuelven por
+   `$VAR` o fallback horneado), así que el árbol único sirve de driver y de
+   nhopkg final del sistema sin paths duplicados.
+3. **BusyBox estático por defecto** (`use-busybox=yes` +
+   `static-busybox=auto` + `static-zstd=auto`, para ambos libc);
+   `--no-busybox` lo desactiva. Motivos:
+   - `nhouser` (helper de nhopkg que usan los scripts de paquete) elige
+     backend *shadow* (`useradd`/`groupadd`) y, si no existe, *busybox*
+     (`adduser`/`addgroup`); con el PATH privado siempre hay fallback, así
+     que la creación de usuarios/grupos no falla por falta de herramientas.
+   - Cubre las tools que el host pueda no tener (`wget`/`curl`, `grep`,
+     `sed`, `awk`, `sort`, `sha256sum`, `zstd`).
+   - Sobrevive a actualizaciones de libc (binarios estáticos).
+   - Si el prebuilt no se puede descargar y no hay `musl-gcc`, meson omite
+     los estáticos: nhopkg degrada al PATH del host/target con un aviso.
    Sustituye al paquete `nhopkg` (`-RS nhopkg --no-check-deps`).
-4. Si el build falla → error claro con las vías (instalar `git`/`meson`/
+4. **El PATH privado solo aplica dentro del chroot.** nhopkg no lo antepone al
+   `PATH` del host (el `busybox tar` fallaba al extraer paquetes binarios con
+   hardlinks absolutos y abortaba la instalación). En su lugar:
+   - los hooks de paquete que nhopkg genera para el target empiezan con
+     `unset NHOPKG_CONF NHOPKG_LIB ...` (los overrides `--root` del host no
+     existen dentro del chroot y hacían fallar a `nhouser`) y luego con el
+     prelude `PATH=/usr/lib/nhopkg/bin:$PATH` (ruta horneada, guardada con
+     `[ -d ]`);
+   - `tar` **no** se enlaza en el PATH privado: los scripts usan el `tar` del
+     target;
+   - el host invoca los applets por ruta absoluta cuando su propia tool falta
+     (`wget-bb`, hashes, `find`), por eso `nhopkg_prepare()` exporta
+     `NHOPKG_BB_DIR`/`NHOPKG_BB_SETUP` apuntando dentro de `$LFS` sin tocar el
+     `PATH`.
+5. Si el build falla → error claro con las vías (instalar `git`/`meson`/
    `ninja` o usar un descargable prebuilt por flavor — futuro).
 
 El cleanup final borra el clon en `/tmp/nhopkg`, pero **conserva** el

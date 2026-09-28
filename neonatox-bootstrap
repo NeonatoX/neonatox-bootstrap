@@ -34,6 +34,7 @@ Opciones globales:
   -z, --timezone <zona>     Zona horaria (default: detectada del host)
   -l, --locale <locale>     Locale (default: es_US.UTF-8)
   --libc {glibc|musl}       Perfil de libc del target (default: glibc)
+  --no-busybox              Construir nhopkg sin BusyBox estático (PATH privado)
   --no-cleanup              Saltar limpieza post-instalación
   --pack-dir <ruta>         Directorio de archivos de paquetes
   -h, --help                Mostrar esta ayuda
@@ -55,6 +56,7 @@ while [[ $# -gt 0 ]]; do
         -z|--timezone) TZONE="$2"; shift 2 ;;
         -l|--locale) LOCALE="$2"; shift 2 ;;
         --libc) LIBC="$2"; shift 2 ;;
+        --no-busybox) BUSYBOX=0; shift ;;
         --no-cleanup) SKIP_CLEANUP=1; shift ;;
         --pack-dir) PACKS_DIR="$2"; shift 2 ;;
         -h|--help) show_help ;;
@@ -67,6 +69,7 @@ done
 [[ -z "$MODE" ]] && MODE="core"
 
 LIBC="${LIBC:-glibc}"
+BUSYBOX="${BUSYBOX:-1}"
 [[ "$LIBC" == "glibc" || "$LIBC" == "musl" ]] || {
     echo "Error: --libc debe ser 'glibc' o 'musl' (recibido: $LIBC)." >&2
     exit 1
@@ -100,6 +103,9 @@ fi
 ##################################################
 #  nhopkg: build único en el target (driver del host + nhopkg final)
 ##################################################
+# BusyBox estático va por defecto (--no-busybox lo desactiva): nhouser lo usa
+# como backend de creación de usuarios/grupos cuando no hay shadow-utils, y
+# el PATH privado cubre las tools que el host pueda no tener.
 NHOPKG_NEEDED_TOOLS=(wget curl grep sed awk sort tar zstd sha256sum)
 
 nhopkg_probe_recipe() {
@@ -114,11 +120,12 @@ nhopkg_probe_recipe() {
     for tool in "${NHOPKG_NEEDED_TOOLS[@]}"; do
         command -v "$tool" >/dev/null 2>&1 || missing=1
     done
+    [[ "$missing" == "1" ]] && echo "  [info] faltan tools en el host; el PATH privado de BusyBox las cubre"
 
-    if [[ "$missing" == "1" ]]; then
-        echo "  [info] faltan tools en el host; habilitando BusyBox estático"
+    if [[ "$BUSYBOX" == "1" ]]; then
         recipe+=(-D use-busybox=yes -D static-busybox=auto -D static-zstd=auto)
     else
+        echo "  [info] --no-busybox: nhopkg usará las tools del host/target"
         recipe+=(-D use-busybox=no -D static-busybox=no -D static-zstd=no)
     fi
 
@@ -149,18 +156,24 @@ nhopkg_clone() {
 #   - nhopkg final del sistema: rutas horneadas correctas (/usr, /etc, /var).
 #   - driver del host durante el bootstrap: se ejecuta desde $LFS exportando
 #     por env sus rutas (libs, conf) apuntando dentro de $LFS, gracias a que
-#     nhopkg respeta NHOPKG_LIB, NHOPKG_UDEP_LIB, NHOPKG_DOWNLOAD_LIB,
-#     NHOPKG_CRYPTO_LIB, NHOPKG_BB_DIR y NHOPKG_BB_SETUP por entorno.
-# Se reconstruye si cambia el --libc (marcador .libc-$LIBC).
+#   nhopkg respeta NHOPKG_LIB, NHOPKG_UDEP_LIB, NHOPKG_DOWNLOAD_LIB y
+#   NHOPKG_CRYPTO_LIB por entorno. El PATH privado de BusyBox ya no se antepone
+#   al del host (nhopkg lo aplica solo dentro del chroot, en los hooks); en el
+#   host los applets se invocan por ruta absoluta vía NHOPKG_BB_DIR.
+# Se reconstruye si cambian el --libc o el estado de BusyBox
+# (marcador .libc-$LIBC-bb{yes,no}).
 nhopkg_build() {
-    local marker="$LFS/etc/nhopkg/.libc-$LIBC"
+    local bb="no"
+    [[ "$BUSYBOX" == "1" ]] && bb="yes"
+    local marker="$LFS/etc/nhopkg/.libc-$LIBC-bb$bb"
     if [[ -x "$LFS/usr/bin/nhopkg" && -f "$marker" ]]; then
         return 0
     fi
     nhopkg_probe_recipe
     nhopkg_require_build_tools
     nhopkg_clone
-    echo "=== [core] Construyendo e instalando nhopkg ($LIBC) en $LFS ==="
+    rm -f "$LFS"/etc/nhopkg/.libc-* 2>/dev/null || true
+    echo "=== [core] Construyendo e instalando nhopkg ($LIBC, busybox=$bb) en $LFS ==="
     pushd /tmp/nhopkg >/dev/null || exit 1
     rm -rf build
     meson setup build \
@@ -183,8 +196,25 @@ nhopkg_prepare() {
     export NHOPKG_UDEP_LIB="$LFS/usr/lib/nhopkg/libnhopkg_udepsys"
     export NHOPKG_DOWNLOAD_LIB="$LFS/usr/lib/nhopkg/libnhopkg_download"
     export NHOPKG_CRYPTO_LIB="$LFS/usr/lib/nhopkg/libnhopkg_crypto"
-    export NHOPKG_BB_DIR="$LFS/usr/lib/nhopkg/bin"
-    export NHOPKG_BB_SETUP="$LFS/usr/lib/nhopkg/nhopkg-bb-setup"
+
+    if [[ "$BUSYBOX" == "1" ]]; then
+        # nhopkg NO antepone su PATH privado de BusyBox al del host: las tools
+        # del host (tar, sed, awk...) deben seguir siendo las suyas. El PATH
+        # privado se aplica solo dentro del chroot, y lo inyecta nhopkg en cada
+        # hook de paquete. Aquí solo se le indica la ruta para que el proceso
+        # del host pueda invocar los applets por ruta absoluta (descargas wget,
+        # hashes, find) cuando falte la tool del host.
+        if [[ -x "$LFS/usr/lib/nhopkg/bin/busybox" ]]; then
+            NHOPKG_BB_DIR="$LFS/usr/lib/nhopkg/bin" \
+                "$LFS/usr/lib/nhopkg/nhopkg-bb-setup" --regenerate >/dev/null 2>&1 || true
+            export NHOPKG_BB_DIR="$LFS/usr/lib/nhopkg/bin"
+            export NHOPKG_BB_SETUP="$LFS/usr/lib/nhopkg/nhopkg-bb-setup"
+        else
+            echo "  [aviso] BusyBox estático no disponible; nhopkg usará las tools del host/target"
+        fi
+    else
+        unset NHOPKG_BB_DIR NHOPKG_BB_SETUP
+    fi
     echo "  [ok] nhopkg listo ($LIBC)"
 }
 
@@ -287,7 +317,7 @@ detect_efi() {
 }
 
 ##################################################
-#  Install base system — 01-base-neonatox.sh
+#  Install base system —  01-base-neonatox.sh
 ##################################################
 install_core() {
 	section="Core"
@@ -297,22 +327,16 @@ install_core() {
     fi
     echo "=== [core] Creando jerarquía de directorios ==="
     
-    if ldd --version 2>&1 | grep -q musl; then
-		mkdir -pv ${LFS}/usr/{bin,lib}
-		ln -sfv usr/lib   ${LFS}/lib64
-		ln -sfv lib ${LFS}/usr/lib64
-	elif ldd --version 2>&1 | grep -q "GNU libc"; then
-		mkdir -pv ${LFS}/usr/{bin,lib,lib32}
-		ln -sfv usr/lib   ${LFS}/lib64
-		ln -sfv usr/lib32 ${LFS}/lib32
-		ln -sfv lib ${LFS}/usr/lib64
-	else
-		mkdir -pv ${LFS}/usr/{bin,lib}
-		ln -sfv usr/lib   ${LFS}/lib64
-		ln -sfv lib ${LFS}/usr/lib64
-	fi
+    mkdir -pv ${LFS}/usr/{bin,lib}
+    ln -sfv usr/lib ${LFS}/lib64
+    ln -sfv lib ${LFS}/usr/lib64
 
-	# merged-usr
+    if [[ "$LIBC" == "glibc" ]]; then
+        mkdir -pv ${LFS}/usr/lib32
+        ln -sfv usr/lib32 ${LFS}/lib32
+    fi
+
+    # merged-usr
     ln -sfv usr/bin   ${LFS}/bin
     ln -sfv usr/bin   ${LFS}/sbin
     ln -sfv usr/lib   ${LFS}/lib
@@ -321,7 +345,7 @@ install_core() {
     mkdir -pv ${LFS}/{dev,proc,sys,run}
     mkdir -pv ${LFS}/{boot,home,mnt,opt,srv}
     mkdir -pv ${LFS}/etc/{opt,sysconfig,skel,profile.d}
-    mkdir -pv ${LFS}/etc/polkit-1/rules.d
+    mkdir -pv ${LFS}/etc/{polkit-1,udev}/rules.d
     mkdir -pv ${LFS}/lib/firmware
     mkdir -pv ${LFS}/media/{floppy,cdrom}
     mkdir -pv ${LFS}/usr/{,local/}{include,src}
@@ -335,6 +359,7 @@ install_core() {
     # evitar que enlacen al host con ..
     ln -sfv ../run ${LFS}/var/run
     ln -sfv ../run/lock ${LFS}/var/lock
+    
     
     install -dv -m 0750 ${LFS}/root
     install -dv -m 1777 ${LFS}/tmp ${LFS}/var/tmp
@@ -483,13 +508,20 @@ EOF
     
     echo "=== [core] Poblando BD de paquetes e instalando core ==="
     nhopkg_prepare
-    nhopkg --root "$LFS" -U
-    nhopkg --root "$LFS" -RS busybox
+    # establecer PATH privado manual
     ln -sf busybox "${LFS}/usr/bin/awk" > /dev/null 2>&1
-    ln -sf busybox "${LFS}/usr/bin/sh" > /dev/null 2>&1
-    ln -sf busybox "${LFS}/usr/bin/sed" > /dev/null 2>&1
+    #ln -sf busybox "${LFS}/usr/bin/sh" > /dev/null 2>&1
+    ln -sf bash "${LFS}/usr/bin/sh" > /dev/null 2>&1
+    
+    nhopkg --root "$LFS" -U
+    nhopkg --root "$LFS" -RS busybox tar bash sed gawk mkinitramfs
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/base") $(awk 'NF && !/^#/' "$PACKS_DIR/base-extra")
     nhopkg --root "$LFS" -RS grub --no-check-deps
+    
+    # Restaurar enlaces a herramientas GNU
+    [ -e "${LFS}/usr/bin/gawk" ] && ln -sf gawk "${LFS}/usr/bin/awk" > /dev/null 2>&1
+	# [ -e "${LFS}/usr/bin/bash" ] && ln -sf bash "${LFS}/usr/bin/sh" > /dev/null 2>&1
+    
     touch "$CORE_SENTINEL"
     echo "=== [core] Listo ==="
 }

@@ -34,8 +34,8 @@ sudo ./neonatox-bootstrap --libc musl -L /mnt gnome
 # nhopkg is always built (git+meson+ninja) as a single tree with
 # the standard prefix (/usr /etc /var), installed into the target via
 # DESTDIR; it acts both as the host-side driver (libs resolved by env
-# inside $LFS) and as the final system nhopkg. If the host lacks some
-# tool, the recipe enables static BusyBox.
+# inside $LFS) and as the final system nhopkg. Static BusyBox (private
+# PATH) is enabled by default; --no-busybox disables it.
 sudo ./neonatox-bootstrap -L /mnt core
 ```
 
@@ -51,6 +51,7 @@ sudo ./neonatox-bootstrap -L /mnt core
 | `-z, --timezone <zone>` | host or `America/Caracas` | Timezone |
 | `-l, --locale <locale>` | `es_US.UTF-8` | System locale |
 | `--libc {glibc\|musl}` | `glibc` | Target libc profile (temporary nhopkg recipe) |
+| `--no-busybox` | — | Build nhopkg without static BusyBox (private PATH) |
 | `--no-cleanup` | — | Skip post-install cleanup |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Package list files |
 
@@ -102,8 +103,11 @@ AGENTS.md                   # guide: usage, architecture and step-by-step flow
      so it operates on `--root $LFS`.
   2. It is the **final system nhopkg** — the baked `/usr`/`/etc`/`/var`
      paths are correct at boot, replacing the `nhopkg` package.
-  If the host lacks some tool, the recipe enables static BusyBox
-  automatically.
+   Static BusyBox is enabled by default in the recipe: the private PATH
+   gives `nhouser` a user/group creation backend (shadow-utils or
+   `adduser`/`addgroup`) and covers any tool the host may lack. That
+   private PATH is only applied inside the target chroot, so host tools
+   (notably `tar`) are never shadowed. Disable it with `--no-busybox`.
 
 ## Flow
 
