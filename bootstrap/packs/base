@@ -1,11 +1,17 @@
+busybox
+tar
+sed
+gawk
+cpio
+bash
+mkinitramfs
+kmod
 acl
 autoconf
 automake
-bash
 bison
 bzip2
 coreutils
-cpio
 cryptsetup
 curl
 dbus
@@ -16,7 +22,6 @@ efibootmgr
 findutils
 flex
 fuse3
-gawk
 git
 glib2
 glibc-locales
@@ -38,7 +43,7 @@ liburing
 libusb
 libxml2
 libxslt
-linux6.18-api-headers
+linux-api-headers
 linux
 make
 man-db

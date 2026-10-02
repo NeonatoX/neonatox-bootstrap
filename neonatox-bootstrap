@@ -215,7 +215,7 @@ nhopkg_prepare() {
     else
         unset NHOPKG_BB_DIR NHOPKG_BB_SETUP
     fi
-    echo "  [ok] nhopkg listo ($LIBC)"
+    echo "  [ok] nhopkg Ready ($LIBC)"
 }
 
 # Variables globales para detección de disco y EFI
@@ -327,46 +327,45 @@ install_core() {
     fi
     echo "=== [core] Creando jerarquía de directorios ==="
     
-    mkdir -pv ${LFS}/usr/{bin,lib}
-    ln -sfv usr/lib ${LFS}/lib64
-    ln -sfv lib ${LFS}/usr/lib64
+    mkdir -p ${LFS}/usr/{bin,lib}
+    ln -sf usr/lib ${LFS}/lib64
+    ln -sf lib ${LFS}/usr/lib64
 
     if [[ "$LIBC" == "glibc" ]]; then
-        mkdir -pv ${LFS}/usr/lib32
-        ln -sfv usr/lib32 ${LFS}/lib32
+        mkdir -p ${LFS}/usr/lib32
+        ln -sf usr/lib32 ${LFS}/lib32
     fi
 
     # merged-usr
-    ln -sfv usr/bin   ${LFS}/bin
-    ln -sfv usr/bin   ${LFS}/sbin
-    ln -sfv usr/lib   ${LFS}/lib
-    ln -sfv bin       ${LFS}/usr/sbin
+    ln -sf usr/bin   ${LFS}/bin
+    ln -sf usr/bin   ${LFS}/sbin
+    ln -sf usr/lib   ${LFS}/lib
+    ln -sf bin       ${LFS}/usr/sbin
 
-    mkdir -pv ${LFS}/{dev,proc,sys,run}
-    mkdir -pv ${LFS}/{boot,home,mnt,opt,srv}
-    mkdir -pv ${LFS}/etc/{opt,sysconfig,skel,profile.d}
-    mkdir -pv ${LFS}/etc/{polkit-1,udev}/rules.d
-    mkdir -pv ${LFS}/lib/firmware
-    mkdir -pv ${LFS}/media/{floppy,cdrom}
-    mkdir -pv ${LFS}/usr/{,local/}{include,src}
-    mkdir -pv ${LFS}/usr/lib/locale
-    mkdir -pv ${LFS}/usr/local/{bin,lib,sbin}
-    mkdir -pv ${LFS}/usr/{,local/}share/{color,dict,doc,info,locale,man}
-    mkdir -pv ${LFS}/usr/{,local/}share/{misc,terminfo,zoneinfo}
-    mkdir -pv ${LFS}/usr/{,local/}share/man/man{1..8}
-    mkdir -pv ${LFS}/var/{cache,local,log,mail,opt,spool}
-    mkdir -pv ${LFS}/var/lib/{color,misc,locate}
+    mkdir -p ${LFS}/{dev,proc,sys,run}
+    mkdir -p ${LFS}/{boot,home,mnt,opt,srv}
+    mkdir -p ${LFS}/etc/{opt,sysconfig,skel,profile.d}
+    mkdir -p ${LFS}/etc/{polkit-1,udev}/rules.d
+    mkdir -p ${LFS}/lib/firmware
+    mkdir -p ${LFS}/media/{floppy,cdrom}
+    mkdir -p ${LFS}/usr/{,local/}{include,src}
+    mkdir -p ${LFS}/usr/lib/locale
+    mkdir -p ${LFS}/usr/local/{bin,lib,sbin}
+    mkdir -p ${LFS}/usr/{,local/}share/{color,dict,doc,info,locale,man}
+    mkdir -p ${LFS}/usr/{,local/}share/{misc,terminfo,zoneinfo}
+    mkdir -p ${LFS}/usr/{,local/}share/man/man{1..8}
+    mkdir -p ${LFS}/var/{cache,local,log,mail,opt,spool}
+    mkdir -p ${LFS}/var/lib/{color,misc,locate}
     # evitar que enlacen al host con ..
-    ln -sfv ../run ${LFS}/var/run
-    ln -sfv ../run/lock ${LFS}/var/lock
-    
+    ln -sf ../run ${LFS}/var/run
+    ln -sf ../run/lock ${LFS}/var/lock
     
     install -dv -m 0750 ${LFS}/root
     install -dv -m 1777 ${LFS}/tmp ${LFS}/var/tmp
 
     echo "=== [core] Copiando archivos de configuración estáticos ==="
-    cp -av "$DATA_DIR/etc/." "$LFS/etc/"
-    cp -av "$DATA_DIR/etc/skel/." "$LFS/root/"
+    cp -a "$DATA_DIR/etc/." "$LFS/etc/"
+    cp -a "$DATA_DIR/etc/skel/." "$LFS/root/"
 
     if [[ -n "${LOCALE:-}" ]]; then
         cat > "${LFS}/etc/locale.conf" <<EOF
@@ -471,7 +470,6 @@ EOF
 ::1        localhost
 
 EOF
-
 	echo "    [INFO] hosts generado"
 
     cat > "${LFS}/etc/hostname" <<EOF
@@ -510,20 +508,19 @@ EOF
     nhopkg_prepare
     # establecer PATH privado manual
     ln -sf busybox "${LFS}/usr/bin/awk" > /dev/null 2>&1
-    #ln -sf busybox "${LFS}/usr/bin/sh" > /dev/null 2>&1
     ln -sf bash "${LFS}/usr/bin/sh" > /dev/null 2>&1
     
     nhopkg --root "$LFS" -U
-    nhopkg --root "$LFS" -RS busybox tar bash sed gawk mkinitramfs
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/base") $(awk 'NF && !/^#/' "$PACKS_DIR/base-extra")
+    # More common linux firmware files
+    nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/linux-firmware")
     nhopkg --root "$LFS" -RS grub --no-check-deps
     
     # Restaurar enlaces a herramientas GNU
     [ -e "${LFS}/usr/bin/gawk" ] && ln -sf gawk "${LFS}/usr/bin/awk" > /dev/null 2>&1
-	# [ -e "${LFS}/usr/bin/bash" ] && ln -sf bash "${LFS}/usr/bin/sh" > /dev/null 2>&1
-    
+	    
     touch "$CORE_SENTINEL"
-    echo "=== [core] Listo ==="
+    echo "=== [core] Ready ==="
 }
 
 ##################################################
