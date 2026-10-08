@@ -35,10 +35,16 @@ Opciones globales:
   -l, --locale <locale>     Locale (default: es_US.UTF-8)
   --libc {glibc|musl}       Perfil de libc del target (default: glibc)
   --no-busybox              Construir nhopkg sin BusyBox estático (PATH privado)
+  --host-nhopkg             Usar el nhopkg del host como driver (no construye;
+                            útil en NeonatoX, netinstall o distros con nhopkg).
   --no-cleanup              Saltar limpieza post-instalación
   --pack-dir <ruta>         Directorio de archivos de paquetes
   -h, --help                Mostrar esta ayuda
   -v, --version             Muestra la version
+
+Variables de entorno:
+  LFS                       Directorio raíz de destino (equivale a --lfs)
+  NB_HOST_NHOPKG=1          Equivale a --host-nhopkg
 
 Use 'neonatox-bootstrap user --help' o 'neonatox-bootstrap grub --help'
 para opciones específicas de cada subcomando.
@@ -57,6 +63,7 @@ while [[ $# -gt 0 ]]; do
         -l|--locale) LOCALE="$2"; shift 2 ;;
         --libc) LIBC="$2"; shift 2 ;;
         --no-busybox) BUSYBOX=0; shift ;;
+        --host-nhopkg) HOST_NHOPKG=1; shift ;;
         --no-cleanup) SKIP_CLEANUP=1; shift ;;
         --pack-dir) PACKS_DIR="$2"; shift 2 ;;
         -h|--help) show_help ;;
@@ -70,10 +77,21 @@ done
 
 LIBC="${LIBC:-glibc}"
 BUSYBOX="${BUSYBOX:-1}"
+HOST_NHOPKG="${HOST_NHOPKG:-${NB_HOST_NHOPKG:-0}}"
 [[ "$LIBC" == "glibc" || "$LIBC" == "musl" ]] || {
     echo "Error: --libc debe ser 'glibc' o 'musl' (recibido: $LIBC)." >&2
     exit 1
 }
+
+# Modo nhopkg del host: requiere un nhopkg operativo en el PATH del host.
+if [[ "$HOST_NHOPKG" == "1" ]]; then
+    command -v nhopkg >/dev/null 2>&1 || {
+        echo "Error: --host-nhopkg/NB_HOST_NHOPKG pide usar el nhopkg del host," >&2
+        echo "       pero 'nhopkg' no está en el PATH. Instálelo o quite la opción." >&2
+        exit 1
+    }
+    [[ "$BUSYBOX" == "0" ]] && echo "  [aviso] --no-busybox no aplica con --host-nhopkg (receta del host)"
+fi
 
 # Verificar que LFS no sea la raíz del host
 [[ "$LFS" != "/" ]] || {
@@ -162,7 +180,10 @@ nhopkg_clone() {
 #   host los applets se invocan por ruta absoluta vía NHOPKG_BB_DIR.
 # Se reconstruye si cambian el --libc o el estado de BusyBox
 # (marcador .libc-$LIBC-bb{yes,no}).
+# Con --host-nhopkg (o NB_HOST_NHOPKG=1) no se construye nada: el nhopkg
+# instalado en el host se usa tal cual como driver (ver nhopkg_prepare).
 nhopkg_build() {
+    [[ "$HOST_NHOPKG" == "1" ]] && return 0
     local bb="no"
     [[ "$BUSYBOX" == "1" ]] && bb="yes"
     local marker="$LFS/etc/nhopkg/.libc-$LIBC-bb$bb"
@@ -188,7 +209,15 @@ nhopkg_build() {
 
 # Prepara el entorno del host para usar el nhopkg del target como driver
 # operando sobre --root $LFS (exporta conf y libs apuntando a $LFS).
+# Con --host-nhopkg se usa el nhopkg del host con su propia config horneada:
+# sin overrides hacia $LFS, sin tocar el PATH y sin BusyBox propio.
 nhopkg_prepare() {
+    if [[ "$HOST_NHOPKG" == "1" ]]; then
+        unset NHOPKG_CONF NHOPKG_LIB NHOPKG_UDEP_LIB NHOPKG_DOWNLOAD_LIB \
+              NHOPKG_CRYPTO_LIB NHOPKG_BB_DIR NHOPKG_BB_SETUP
+        echo "  [ok] nhopkg del host ($(command -v nhopkg)) ($LIBC)"
+        return 0
+    fi
     nhopkg_build
     export PATH="$LFS/usr/bin:$PATH"
     export NHOPKG_CONF="$LFS/etc/nhopkg/nhopkg.conf"
@@ -512,6 +541,11 @@ EOF
     
     nhopkg --root "$LFS" -U
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/base") $(awk 'NF && !/^#/' "$PACKS_DIR/base-extra")
+    # En modo host no hay árbol DESTDIR: el nhopkg final del sistema va como
+    # paquete (solo si un run anterior no dejó ya un binario en $LFS).
+    if [[ "$HOST_NHOPKG" == "1" && ! -x "$LFS/usr/bin/nhopkg" ]]; then
+        nhopkg --root "$LFS" -RS nhopkg --no-check-deps
+    fi
     # More common linux firmware files
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/linux-firmware")
     nhopkg --root "$LFS" -RS grub --no-check-deps

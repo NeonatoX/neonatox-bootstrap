@@ -66,6 +66,7 @@ neonatox-bootstrap [--lfs <dir>] [opciones] <comando>
 | `-l, --locale <locale>` | `es_US.UTF-8` | Locale del sistema |
 | `--libc {glibc\|musl}` | `glibc` | Perfil de libc del target (receta de nhopkg temporal) |
 | `--no-busybox` | — | Construye nhopkg sin BusyBox estático (PATH privado) |
+| `--host-nhopkg` | — | Reutiliza el nhopkg del host como driver (salta la build; env `NB_HOST_NHOPKG=1`) |
 | `--no-cleanup` | — | Salta `rm -rf /usr/src/* /tmp/*` al final |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Directorio de listas de paquetes |
 | `-h, --help` | — | Muestra la ayuda |
@@ -93,7 +94,8 @@ sudo ./neonatox-bootstrap grub --efi -L /mnt
 - **DE (`kde`/`gnome`/`xfce`)** instalan `desktop-common` + el pack del DE,
   ejecutan `systemctl enable lightdm` en chroot y limpian.
   - GNOME además elimina qt5/qt6; XFCE elimina qt6.
-- **nhopkg se construye siempre desde fuente en el host.** El nhopkg del
+- **nhopkg se construye siempre desde fuente en el host**, salvo con
+  `--host-nhopkg`. El nhopkg del
   sistema **no se usa**: su config corresponde al flavor del host, no al
   del target, así que no garantiza los repos del `--libc` elegido. Se
   genera **un único árbol** con meson (ver
@@ -111,6 +113,16 @@ sudo ./neonatox-bootstrap grub --efi -L /mnt
     `NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
     `NHOPKG_DOWNLOAD_LIB` y `NHOPKG_CRYPTO_LIB` apuntando a `$LFS`
     (nhopkg respeta esas rutas por entorno, sin paths horneados del host).
+  - **Excepción `--host-nhopkg`** (o `NB_HOST_NHOPKG=1`): el nhopkg ya
+    instalado en el host se usa tal cual como driver — `nhopkg_build()`
+    sale sin construir nada (sin `git`/`meson`/`ninja` ni árbol `DESTDIR`),
+    `nhopkg_prepare()` hace `unset` de los `NHOPKG_*` y no toca el `PATH`,
+    con lo que manda la config y el BusyBox propios del host. El nhopkg
+    final del sistema se instala entonces como paquete en `core`
+    (`-RS nhopkg --no-check-deps`, solo si `$LFS/usr/bin/nhopkg` no
+    existe aún). Asume que los repos del host coinciden con el perfil
+    `--libc` del target (mismo flavor); falla temprano si el host no
+    tiene `nhopkg`.
 - **Sentinels** (`/var/nhopkg/.core-installed`,
   `/var/nhopkg/.desktop-common-installed`) evitan reinstalaciones.
 
@@ -137,7 +149,7 @@ sudo ./neonatox-bootstrap grub --efi -L /mnt
 4. **Metadata de nhopkg** — `mkdir -p $LFS/var/nhopkg/{cache,files,logs,packages,repo}`
 5. **Archivos dinámicos** — `fstab` (blkid), `hosts`/`hostname` (DMI+random), timezone (host), `machine-id`
 6. **Paquetes core** — `nhopkg --root $LFS -U` (poblar BD), `-RS busybox` (+ symlink `sh → busybox` para acceso temprano al shell), `-RS base base-extra`, `-RS grub --no-check-deps`
-7. **nhopkg final en el target** — el tree único de `nhopkg_build()` ya quedó en `$LFS` con prefix estándar `/usr`/`/etc`/`/var`, sustituyendo al paquete `nhopkg`
+7. **nhopkg final en el target** — el tree único de `nhopkg_build()` ya quedó en `$LFS` con prefix estándar `/usr`/`/etc`/`/var`, sustituyendo al paquete `nhopkg`; con `--host-nhopkg` ese árbol no existe, así que va `-RS nhopkg --no-check-deps`
 8. **Sentinel** — se crea `$LFS/var/nhopkg/.core-installed`
 
 Todo lo anterior se ejecuta directamente sobre `$LFS` con `nhopkg --root`,
@@ -149,6 +161,9 @@ usando como driver el nhopkg instalado dentro de `$LFS`.
 sistema no se usa porque su config corresponde al flavor del host, no al
 del target. `nhopkg_build()` hornea **un único árbol** con el prefix
 estándar y lo instala en el target vía `DESTDIR`:
+
+> **Excepción `--host-nhopkg` / `NB_HOST_NHOPKG=1`** — todo lo siguiente
+> se salta y se reutiliza el nhopkg del host (ver paso 6).
 
 1. **Build único en el target** — `nhopkg_build()` corre meson con
    `--prefix=/usr --sysconfdir=/etc --localstatedir=/var` + `DESTDIR=$LFS`,
@@ -196,6 +211,12 @@ estándar y lo instala en el target vía `DESTDIR`:
      `PATH`.
 5. Si el build falla → error claro con las vías (instalar `git`/`meson`/
    `ninja` o usar un descargable prebuilt por flavor — futuro).
+6. **Modo `--host-nhopkg`** — si el flag (o `NB_HOST_NHOPKG=1`) está
+   activo, se valida al arrancar que `nhopkg` exista en el PATH del host;
+   `nhopkg_build()` retorna sin hacer nada y `nhopkg_prepare()` solo
+   limpia los `NHOPKG_*` heredados, dejando el nhopkg del host (su config,
+   sus libs, su BusyBox) como driver. El target recibe su nhopkg vía
+   `-RS nhopkg --no-check-deps` tras los packs base.
 
 El cleanup final borra el clon en `/tmp/nhopkg`, pero **conserva** el
 nhopkg ya instalado en `$LFS/usr`.

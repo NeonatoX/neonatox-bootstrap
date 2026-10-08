@@ -37,6 +37,11 @@ sudo ./neonatox-bootstrap --libc musl -L /mnt gnome
 # inside $LFS) and as the final system nhopkg. Static BusyBox (private
 # PATH) is enabled by default; --no-busybox disables it.
 sudo ./neonatox-bootstrap -L /mnt core
+
+# Hosts that already ship nhopkg (NeonatoX live/netinstall, other distros):
+# reuse it as driver, skip the build entirely (no git/meson/ninja).
+sudo ./neonatox-bootstrap --host-nhopkg -L /mnt core
+sudo NB_HOST_NHOPKG=1 ./neonatox-bootstrap -L /mnt core   # same, via env
 ```
 
 ### Arguments
@@ -52,6 +57,7 @@ sudo ./neonatox-bootstrap -L /mnt core
 | `-l, --locale <locale>` | `es_US.UTF-8` | System locale |
 | `--libc {glibc\|musl}` | `glibc` | Target libc profile (temporary nhopkg recipe) |
 | `--no-busybox` | — | Build nhopkg without static BusyBox (private PATH) |
+| `--host-nhopkg` | — | Reuse the host's `nhopkg` as driver (skip the build; env `NB_HOST_NHOPKG=1`) |
 | `--no-cleanup` | — | Skip post-install cleanup |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Package list files |
 
@@ -108,6 +114,14 @@ AGENTS.md                   # guide: usage, architecture and step-by-step flow
    `adduser`/`addgroup`) and covers any tool the host may lack. That
    private PATH is only applied inside the target chroot, so host tools
    (notably `tar`) are never shadowed. Disable it with `--no-busybox`.
+- **`--host-nhopkg`** (or `NB_HOST_NHOPKG=1`) flips that default: the
+  `nhopkg` already present in the host is reused as-is — no clone, no
+  `meson`/`ninja`, no `DESTDIR` tree, and the host's own config/BusyBox
+  are used (no `NHOPKG_*` overrides pointing into `$LFS`). The final
+  system nhopkg is then installed as a regular package
+  (`nhopkg -RS nhopkg --no-check-deps`) during `core`. It assumes the
+  host's repos match the target `--libc` profile (same flavor), which
+  holds on NeonatoX live-boot / netinstall.
 
 ## Flow
 

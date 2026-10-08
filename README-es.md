@@ -35,6 +35,11 @@ sudo ./neonatox-bootstrap --libc musl -L /mnt gnome
 # interior de $LFS) y de nhopkg final del sistema. Si el host no tiene
 # alguna tool, la receta habilita BusyBox estático.
 sudo ./neonatox-bootstrap -L /mnt core
+
+# Hosts que ya traen nhopkg (NeonatoX live/netinstall, otras distros):
+# se reutiliza como driver y se salta la construcción (sin git/meson/ninja).
+sudo ./neonatox-bootstrap --host-nhopkg -L /mnt core
+sudo NB_HOST_NHOPKG=1 ./neonatox-bootstrap -L /mnt core   # ídem vía env
 ```
 
 ### Argumentos
@@ -49,6 +54,7 @@ sudo ./neonatox-bootstrap -L /mnt core
 | `-z, --timezone <zona>` | host o `America/Caracas` | Zona horaria |
 | `-l, --locale <locale>` | `es_US.UTF-8` | Locale del sistema |
 | `--libc {glibc\|musl}` | `glibc` | Perfil de libc del target (receta de nhopkg) |
+| `--host-nhopkg` | — | Reutiliza el nhopkg del host como driver (salta la build; env `NB_HOST_NHOPKG=1`) |
 | `--no-cleanup` | — | Salta limpieza post-instalación |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Listas de paquetes |
 
@@ -101,8 +107,16 @@ AGENTS.md                   # guía: uso, arquitectura y flujo paso a paso
   2. Es el **nhopkg final del sistema** — las rutas horneadas
      `/usr`/`/etc`/`/var` son las correctas en boot, sustituyendo al
      paquete `nhopkg`.
-  Si falta alguna tool en el host, la receta activa BusyBox estático
-  automáticamente.
+   Si falta alguna tool en el host, la receta activa BusyBox estático
+   automáticamente.
+- **`--host-nhopkg`** (o `NB_HOST_NHOPKG=1`) invierte eso: se reutiliza
+  el `nhopkg` ya presente en el host tal cual — sin clone, sin
+  `meson`/`ninja`, sin árbol `DESTDIR` y con la config/BusyBox propias del
+  host (sin overrides `NHOPKG_*` hacia `$LFS`). El nhopkg final del
+  sistema se instala entonces como paquete normal
+  (`nhopkg -RS nhopkg --no-check-deps`) durante `core`. Asume que los
+  repos del host coinciden con el perfil `--libc` del target (mismo
+  flavor), como ocurre en NeonatoX live-boot / netinstall.
 
 ## Flujo
 
