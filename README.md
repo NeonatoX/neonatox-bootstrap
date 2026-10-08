@@ -58,6 +58,7 @@ sudo NB_HOST_NHOPKG=1 ./neonatox-bootstrap -L /mnt core   # same, via env
 | `--libc {glibc\|musl}` | `glibc` | Target libc profile (temporary nhopkg recipe) |
 | `--no-busybox` | — | Build nhopkg without static BusyBox (private PATH) |
 | `--host-nhopkg` | — | Reuse the host's `nhopkg` as driver (skip the build; env `NB_HOST_NHOPKG=1`) |
+| `--skip-sentinel` | — | Don't require the `core` sentinel for `chroot`/`user`/`grub` (env `NB_SKIP_SENTINEL=1`) |
 | `--no-cleanup` | — | Skip post-install cleanup |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Package list files |
 

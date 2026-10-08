@@ -38,6 +38,8 @@ Opciones globales:
   --host-nhopkg             Usar el nhopkg del host como driver (no construye;
                             útil en NeonatoX, netinstall o distros con nhopkg).
   --no-cleanup              Saltar limpieza post-instalación
+  --skip-sentinel           No exigir el sentinel de core para chroot/user/grub
+                            (para sistemas o instalaciones sin sentinel)
   --pack-dir <ruta>         Directorio de archivos de paquetes
   -h, --help                Mostrar esta ayuda
   -v, --version             Muestra la version
@@ -45,6 +47,7 @@ Opciones globales:
 Variables de entorno:
   LFS                       Directorio raíz de destino (equivale a --lfs)
   NB_HOST_NHOPKG=1          Equivale a --host-nhopkg
+  NB_SKIP_SENTINEL=1        Equivale a --skip-sentinel
 
 Use 'neonatox-bootstrap user --help' o 'neonatox-bootstrap grub --help'
 para opciones específicas de cada subcomando.
@@ -64,6 +67,7 @@ while [[ $# -gt 0 ]]; do
         --libc) LIBC="$2"; shift 2 ;;
         --no-busybox) BUSYBOX=0; shift ;;
         --host-nhopkg) HOST_NHOPKG=1; shift ;;
+        --skip-sentinel) SKIP_SENTINEL=1; shift ;;
         --no-cleanup) SKIP_CLEANUP=1; shift ;;
         --pack-dir) PACKS_DIR="$2"; shift 2 ;;
         -h|--help) show_help ;;
@@ -78,6 +82,7 @@ done
 LIBC="${LIBC:-glibc}"
 BUSYBOX="${BUSYBOX:-1}"
 HOST_NHOPKG="${HOST_NHOPKG:-${NB_HOST_NHOPKG:-0}}"
+SKIP_SENTINEL="${SKIP_SENTINEL:-${NB_SKIP_SENTINEL:-0}}"
 [[ "$LIBC" == "glibc" || "$LIBC" == "musl" ]] || {
     echo "Error: --libc debe ser 'glibc' o 'musl' (recibido: $LIBC)." >&2
     exit 1
@@ -257,6 +262,24 @@ DE_SENTINEL="${LFS}/var/nhopkg/.desktop-common-installed"
 
 core_instalado() { [[ -f "$CORE_SENTINEL" ]]; }
 de_common_instalado() { [[ -f "$DE_SENTINEL" ]]; }
+
+# Gate de los comandos que exigen `core` (chroot/user/grub).
+# --skip-sentinel (o NB_SKIP_SENTINEL=1) lo salta para sistemas o
+# instalaciones sin sentinel; la idempotencia de `core` y los
+# auto-triggers de los DEs no cambian.
+requiere_core() {
+    core_instalado && return 0
+    if [[ "$SKIP_SENTINEL" == "1" ]]; then
+        [[ -d "$LFS" ]] || {
+            echo "Error: $LFS no existe (no hay sentinel ni target)." >&2
+            exit 1
+        }
+        echo "  [aviso] sentinel ausente; forzado por --skip-sentinel" >&2
+        return 0
+    fi
+    echo "Error: ejecute 'core' primero." >&2
+    exit 1
+}
 
 # Limpieza al salir (error, Ctrl+C, fin normal)
 cleanup_all() {
@@ -642,7 +665,7 @@ install_xfce() {
 ##################################################
 
 do_chroot() {
-    core_instalado || { echo "Error: ejecute 'core' primero." >&2; exit 1; }
+    requiere_core
     chroot_prepare
     echo "Entrando en chroot $LFS (escriba 'exit' para salir)"
     chroot "$LFS" /bin/bash
@@ -688,7 +711,7 @@ EOF
 
     [[ -n "$USERNAME" ]] || { echo "Error: --username es requerido" >&2; exit 1; }
 
-    core_instalado || { echo "Error: ejecute 'core' primero." >&2; exit 1; }
+    requiere_core
 
     chroot_prepare
 
@@ -765,7 +788,7 @@ EOF
         esac
     done
 
-    core_instalado || { echo "Error: ejecute 'core' primero." >&2; exit 1; }
+    requiere_core
 
     # Detectar disco base desde el punto de montaje
     if [[ -z "$DEVICE" ]]; then

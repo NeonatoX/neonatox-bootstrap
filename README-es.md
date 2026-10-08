@@ -55,6 +55,7 @@ sudo NB_HOST_NHOPKG=1 ./neonatox-bootstrap -L /mnt core   # ídem vía env
 | `-l, --locale <locale>` | `es_US.UTF-8` | Locale del sistema |
 | `--libc {glibc\|musl}` | `glibc` | Perfil de libc del target (receta de nhopkg) |
 | `--host-nhopkg` | — | Reutiliza el nhopkg del host como driver (salta la build; env `NB_HOST_NHOPKG=1`) |
+| `--skip-sentinel` | — | No exige el sentinel de `core` para `chroot`/`user`/`grub` (env `NB_SKIP_SENTINEL=1`) |
 | `--no-cleanup` | — | Salta limpieza post-instalación |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Listas de paquetes |
 

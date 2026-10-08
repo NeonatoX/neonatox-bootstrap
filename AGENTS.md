@@ -67,6 +67,7 @@ neonatox-bootstrap [--lfs <dir>] [opciones] <comando>
 | `--libc {glibc\|musl}` | `glibc` | Perfil de libc del target (receta de nhopkg temporal) |
 | `--no-busybox` | — | Construye nhopkg sin BusyBox estático (PATH privado) |
 | `--host-nhopkg` | — | Reutiliza el nhopkg del host como driver (salta la build; env `NB_HOST_NHOPKG=1`) |
+| `--skip-sentinel` | — | No exige el sentinel de `core` para `chroot`/`user`/`grub` (env `NB_SKIP_SENTINEL=1`) |
 | `--no-cleanup` | — | Salta `rm -rf /usr/src/* /tmp/*` al final |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Directorio de listas de paquetes |
 | `-h, --help` | — | Muestra la ayuda |
@@ -252,6 +253,11 @@ neonatox-bootstrap user --username root -p <contraseña>
   falta, ejecutan `core` y `desktop-common` automáticamente.
 - `user` y `grub` requieren `core` instalado (verifican el sentinel).
 - `chroot` requiere `core` instalado (verifica el sentinel).
+- Los tres gates anteriores usan `requiere_core()`, que se salta con
+  `--skip-sentinel` / `NB_SKIP_SENTINEL=1` (sistemas o instalaciones sin
+  sentinel); exige sí o sí que `$LFS` exista. No afecta a la
+  idempotencia de `core` (sigue saltándose si el sentinel existe) ni a
+  los auto-triggers de los DEs (`core_instalado || install_core`).
 
 ### Diagrama
 
