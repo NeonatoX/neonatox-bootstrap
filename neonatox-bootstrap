@@ -412,8 +412,8 @@ install_core() {
     ln -sf ../run ${LFS}/var/run
     ln -sf ../run/lock ${LFS}/var/lock
     
-    install -dv -m 0750 ${LFS}/root
-    install -dv -m 1777 ${LFS}/tmp ${LFS}/var/tmp
+    install -d -m 0750 ${LFS}/root
+    install -d -m 1777 ${LFS}/tmp ${LFS}/var/tmp
 
     echo "=== [core] Copiando archivos de configuración estáticos ==="
     cp -a "$DATA_DIR/etc/." "$LFS/etc/"
@@ -570,7 +570,7 @@ EOF
         nhopkg --root "$LFS" -RS nhopkg --no-check-deps
     fi
     # More common linux firmware files
-    nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/linux-firmware")
+    # nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/linux-firmware")
     nhopkg --root "$LFS" -RS grub --no-check-deps
     
     # Restaurar enlaces a herramientas GNU
