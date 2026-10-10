@@ -101,10 +101,13 @@ AGENTS.md                   # guía: uso, arquitectura y flujo paso a paso
   único árbol** (`git`, `meson` y `ninja` requeridos) con la receta del
   `--libc` elegido, instalado en `$LFS` vía `DESTDIR` con el prefix
   estándar (`--prefix=/usr --sysconfdir=/etc --localstatedir=/var`):
-  1. Es el **driver del host** durante el bootstrap — las libs y la conf
-     se resuelven por env (`NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
-     `NHOPKG_DOWNLOAD_LIB`, `NHOPKG_CRYPTO_LIB`) apuntando al interior de
-     `$LFS`, así opera sobre `--root $LFS`.
+  1. Es el **driver del host** durante el bootstrap — se invoca por ruta
+     absoluta (el `/usr/bin` del target **no** se pone en el `PATH` del
+     host), con las libs y la conf resueltas por env (`NHOPKG_CONF`,
+     `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`, `NHOPKG_DOWNLOAD_LIB`,
+     `NHOPKG_CRYPTO_LIB` y `NHOPKG_GETTEXT=no`) apuntando al interior de
+     `$LFS`, así opera sobre `--root $LFS` mientras en el host solo corren
+     tools del host o applets estáticos.
   2. Es el **nhopkg final del sistema** — las rutas horneadas
      `/usr`/`/etc`/`/var` son las correctas en boot, sustituyendo al
      paquete `nhopkg`.

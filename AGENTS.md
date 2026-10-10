@@ -109,11 +109,13 @@ sudo ./neonatox-bootstrap grub --efi -L /mnt
      sustituye al paquete `nhopkg`. Se reconstruye si cambian el `--libc` o
      el estado de BusyBox (`--no-busybox`).
   - **Driver del host** = el mismo nhopkg de `$LFS`, ejecutado desde el
-    host con `nhopkg_prepare()`: antepone `$LFS/usr/bin` (y
-    `$LFS/usr/lib/nhopkg/bin` si hay BusyBox) al `PATH` y exporta
-    `NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
-    `NHOPKG_DOWNLOAD_LIB` y `NHOPKG_CRYPTO_LIB` apuntando a `$LFS`
-    (nhopkg respeta esas rutas por entorno, sin paths horneados del host).
+    host con `nhopkg_prepare()`: se invoca por ruta absoluta (define
+    `nhopkg()` apuntando a `$LFS/usr/bin/nhopkg`; no antepone
+    `$LFS/usr/bin` al `PATH`, para no exponer binarios del target al host)
+    y exporta `NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
+    `NHOPKG_DOWNLOAD_LIB`, `NHOPKG_CRYPTO_LIB` apuntando a `$LFS` y
+    `NHOPKG_GETTEXT=no` (no se asume gettext en el host). nhopkg respeta
+    esas rutas por entorno, sin paths horneados del host.
   - **Excepción `--host-nhopkg`** (o `NB_HOST_NHOPKG=1`): el nhopkg ya
     instalado en el host se usa tal cual como driver — `nhopkg_build()`
     sale sin construir nada (sin `git`/`meson`/`ninja` ni árbol `DESTDIR`),
@@ -177,9 +179,11 @@ estándar y lo instala en el target vía `DESTDIR`:
      `repo-arch=x86_64-musl`, `libc=musl`, `git-branch=musl`
 2. **Driver del host** — `nhopkg_prepare()` reusa ese mismo nhopkg ya
    instalado en `$LFS`, sin recompilar. Para ejecutarlo desde el host
-   operando sobre `--root $LFS`, antepone `$LFS/usr/bin` al `PATH` y
-   exporta `NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
-   `NHOPKG_DOWNLOAD_LIB` y `NHOPKG_CRYPTO_LIB` apuntando dentro de `$LFS`.
+   operando sobre `--root $LFS`, define `nhopkg()` apuntando a
+   `$LFS/usr/bin/nhopkg` por ruta absoluta (no toca el `PATH`, así no
+   expone los binarios del target al host) y exporta `NHOPKG_CONF`,
+   `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`, `NHOPKG_DOWNLOAD_LIB`,
+   `NHOPKG_CRYPTO_LIB` apuntando dentro de `$LFS`, más `NHOPKG_GETTEXT=no`.
    nhopkg respeta esas rutas por entorno (las libs y la conf se resuelven por
    `$VAR` o fallback horneado), así que el árbol único sirve de driver y de
    nhopkg final del sistema sin paths duplicados.

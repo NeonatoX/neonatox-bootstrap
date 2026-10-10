@@ -104,10 +104,12 @@ AGENTS.md                   # guide: usage, architecture and step-by-step flow
   (`git`, `meson` and `ninja` required) is built with the recipe for the
   selected `--libc` and installed into `$LFS` with the standard prefix
   (`--prefix=/usr --sysconfdir=/etc --localstatedir=/var`) via `DESTDIR`:
-  1. It is the **host-side driver** during bootstrap — the libs/conf are
-     resolved by env (`NHOPKG_CONF`, `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`,
-     `NHOPKG_DOWNLOAD_LIB`, `NHOPKG_CRYPTO_LIB`) pointing inside `$LFS`,
-     so it operates on `--root $LFS`.
+  1. It is the **host-side driver** during bootstrap — invoked by absolute
+     path (the target's `/usr/bin` is **not** put on the host `PATH`), with
+     the libs/conf resolved by env (`NHOPKG_CONF`, `NHOPKG_LIB`,
+     `NHOPKG_UDEP_LIB`, `NHOPKG_DOWNLOAD_LIB`, `NHOPKG_CRYPTO_LIB` and
+     `NHOPKG_GETTEXT=no`) pointing inside `$LFS`, so it operates on
+     `--root $LFS` while only host tools or static applets run on the host.
   2. It is the **final system nhopkg** — the baked `/usr`/`/etc`/`/var`
      paths are correct at boot, replacing the `nhopkg` package.
    Static BusyBox is enabled by default in the recipe: the private PATH
