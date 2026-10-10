@@ -214,9 +214,14 @@ nhopkg_build() {
 
 # Prepara el entorno del host para usar el nhopkg del target como driver
 # operando sobre --root $LFS (exporta conf y libs apuntando a $LFS).
+# El driver se invoca por ruta absoluta: el bin del target NO se expone al
+# PATH del host (§ abajo). Desactiva gettext (no se asume que el host lo tenga).
 # Con --host-nhopkg se usa el nhopkg del host con su propia config horneada:
-# sin overrides hacia $LFS, sin tocar el PATH y sin BusyBox propio.
+# sin overrides hacia $LFS y sin BusyBox propio.
 nhopkg_prepare() {
+    # gettext puede faltar en el host: el driver imprime los mensajes fuente
+    # sin depender de él. Aplica a ambos modos (host y árbol del target).
+    export NHOPKG_GETTEXT="no"
     if [[ "$HOST_NHOPKG" == "1" ]]; then
         unset NHOPKG_CONF NHOPKG_LIB NHOPKG_UDEP_LIB NHOPKG_DOWNLOAD_LIB \
               NHOPKG_CRYPTO_LIB NHOPKG_BB_DIR NHOPKG_BB_SETUP
@@ -224,7 +229,15 @@ nhopkg_prepare() {
         return 0
     fi
     nhopkg_build
-    export PATH="$LFS/usr/bin:$PATH"
+
+    # El bin del target NUNCA va al PATH del host: si el target tiene otra libc
+    # (p.ej. glibc sobre host musl) sus binarios dinámicos no son ejecutables y
+    # envenenan el driver y la validación del PATH privado de BusyBox (readlink
+    # falla y el PATH privado queda desactivado). El driver se alcanza por ruta
+    # absoluta; en el host solo corren tools del host o applets estáticos, y los
+    # binarios del target se ejecutan únicamente dentro del chroot.
+    nhopkg() { "$LFS/usr/bin/nhopkg" "$@"; }
+
     export NHOPKG_CONF="$LFS/etc/nhopkg/nhopkg.conf"
     export NHOPKG_LIB="$LFS/usr/lib/nhopkg/libnhopkg"
     export NHOPKG_UDEP_LIB="$LFS/usr/lib/nhopkg/libnhopkg_udepsys"
