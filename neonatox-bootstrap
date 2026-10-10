@@ -571,10 +571,9 @@ EOF
     
     echo "=== [core] Poblando BD de paquetes e instalando core ==="
     nhopkg_prepare
-    # establecer PATH privado manual
-    ln -sf busybox "${LFS}/usr/bin/awk" > /dev/null 2>&1
+    # /bin/sh -> bash para que los hooks corran con bash (libnhopkg es bash-only)
     ln -sf bash "${LFS}/usr/bin/sh" > /dev/null 2>&1
-    
+
     nhopkg --root "$LFS" -U
     nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/base") $(awk 'NF && !/^#/' "$PACKS_DIR/base-extra")
     # En modo host no hay árbol DESTDIR: el nhopkg final del sistema va como
@@ -586,7 +585,7 @@ EOF
     # nhopkg --root "$LFS" -RS $(awk 'NF && !/^#/' "$PACKS_DIR/linux-firmware")
     nhopkg --root "$LFS" -RS grub --no-check-deps
     
-    # Restaurar enlaces a herramientas GNU
+    # awk de GNU, si el paquete lo dejó disponible
     [ -e "${LFS}/usr/bin/gawk" ] && ln -sf gawk "${LFS}/usr/bin/awk" > /dev/null 2>&1
 	    
     touch "$CORE_SENTINEL"
