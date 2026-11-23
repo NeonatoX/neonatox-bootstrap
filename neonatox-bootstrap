@@ -1,15 +1,47 @@
 #!/bin/bash
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DATA_DIR="$SCRIPT_DIR/bootstrap/data"
-PACKS_DIR="$SCRIPT_DIR/bootstrap/packs"
-NB_VERSION="v0.1"
+
+# Tokens sustituidos por meson al instalar. Desde el source tree quedan
+# literales y se usa el directorio del script como fallback.
+NB_INSTALLED_DATADIR='@NB_DATADIR@'
+NB_INSTALLED_SYSCONFDIR='@NB_SYSCONFDIR@'
+[[ "$NB_INSTALLED_DATADIR" == @*@ ]] && NB_INSTALLED_DATADIR="$SCRIPT_DIR/bootstrap"
+[[ "$NB_INSTALLED_SYSCONFDIR" == @*@ ]] && NB_INSTALLED_SYSCONFDIR="$SCRIPT_DIR"
+
+NB_VERSION="@NB_VERSION@"
+[[ "$NB_VERSION" == @*@ ]] && NB_VERSION="v0.1"
+
+DATA_DIR="${DATA_DIR:-$NB_INSTALLED_DATADIR/data}"
+PACKS_DIR="${PACKS_DIR:-$NB_INSTALLED_DATADIR/packs}"
+
+# Config: -c/--config > NB_CONFIG > sysconfdir instalado / raíz del repo.
+# Pre-scan para que la CLI siempre gane al config (se sourcea antes del parseo).
+NB_CONFIG="${NB_CONFIG:-$NB_INSTALLED_SYSCONFDIR/neonatox-bootstrap.conf}"
+NB_CONFIG_CLI=""
+_args=("$@")
+for ((i = 0; i < ${#_args[@]}; i++)); do
+    case "${_args[i]}" in
+        -c|--config)
+            if [[ -z "${_args[i+1]:-}" ]]; then
+                echo "Error: ${_args[i]} requiere un archivo." >&2
+                exit 1
+            fi
+            NB_CONFIG_CLI="${_args[i+1]}"
+            NB_CONFIG="$NB_CONFIG_CLI"
+            ;;
+    esac
+done
+[[ -r "$NB_CONFIG" ]] && source "$NB_CONFIG"
+# El config no puede reemplazar la ruta elegida por -c/--config.
+[[ -n "$NB_CONFIG_CLI" ]] && NB_CONFIG="$NB_CONFIG_CLI"
 
 LFS="${LFS:-/mnt}"
 MODE=""
 
 show_ver() {
 	echo "${0} - ${NB_VERSION}"
+	exit 0
 }
 
 show_help() {
@@ -26,17 +58,18 @@ Comandos:
   chroot          Entrar en chroot interactivo en $LFS
 
 Opciones globales:
-  -L, --lfs <ruta>      Directorio raíz de destino (default: $LFS env o /mnt)
+  -L, --lfs <ruta>      Directorio raíz de destino (default: $LFS env o /mnt; NUNCA /)
+  -c, --config <archivo> Archivo de configuración (default: neonatox-bootstrap.conf)
   --hostname <nombre>   Sobrescribir nombre de host autogenerado
   --device <disp>       Dispositivo para fstab (detección automática)
   --uuid <uuid>         UUID para fstab (detección automática)
   --fstype <tipo>       Tipo de sistema de archivos (detección automática)
   -z, --timezone <zona>     Zona horaria (default: detectada del host)
-  -l, --locale <locale>     Locale (default: es_US.UTF-8)
-  --libc {glibc|musl}       Perfil de libc del target (default: glibc)
-  --no-busybox              Construir nhopkg sin BusyBox estático (PATH privado)
+  -l, --locale <locale>     Locale (default: en_US.UTF-8)
+  --libc {glibc|musl}       Perfil de libc del target (default: glibc, repo n27)
+  --no-busybox              Construir nhopkg sin BusyBox estático (solo si se compila)
   --host-nhopkg             Usar el nhopkg del host como driver (no construye;
-                            útil en NeonatoX, netinstall o distros con nhopkg).
+                            perfil por defecto del config de netinstall).
   --no-cleanup              Saltar limpieza post-instalación
   --skip-sentinel           No exigir el sentinel de core para chroot/user/grub
                             (para sistemas o instalaciones sin sentinel)
@@ -46,8 +79,13 @@ Opciones globales:
 
 Variables de entorno:
   LFS                       Directorio raíz de destino (equivale a --lfs)
+  NB_CONFIG                 Archivo de configuración (equivale a --config)
   NB_HOST_NHOPKG=1          Equivale a --host-nhopkg
   NB_SKIP_SENTINEL=1        Equivale a --skip-sentinel
+
+Precedencia: CLI > archivo de configuración > entorno > defaults.
+El config de ejemplo incluye el perfil NETINSTALL (nhopkg del host, sin
+gettext, sin BusyBox; zstd y BusyBox los provee neonatox-live-boot).
 
 Use 'neonatox-bootstrap user --help' o 'neonatox-bootstrap grub --help'
 para opciones específicas de cada subcomando.
@@ -58,6 +96,7 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -L|--lfs) LFS="$2"; shift 2 ;;
+        -c|--config) shift 2 ;;   # ya se sourceó en el pre-scan
         --hostname) NHOSTNAME="$2"; shift 2 ;;
         --device) DEVICE_OVERRIDE="$2"; shift 2 ;;
         --uuid) UUID_OVERRIDE="$2"; shift 2 ;;
@@ -136,7 +175,7 @@ nhopkg_probe_recipe() {
     if [[ "$LIBC" == "musl" ]]; then
         recipe=(-D binlocate=plocate -D repo-version=n27 -D repo-arch=x86_64-musl -D libc=musl -D git-branch=musl)
     else
-        recipe=(-D repo-version=n2026 -D repo-arch=x86_64 -D git-branch=n2026)
+        recipe=(-D binlocate=plocate -D repo-version=n27 -D repo-arch=x86_64)
     fi
 
     local tool missing=0
@@ -150,6 +189,13 @@ nhopkg_probe_recipe() {
     else
         echo "  [info] --no-busybox: nhopkg usará las tools del host/target"
         recipe+=(-D use-busybox=no -D static-busybox=no -D static-zstd=no)
+    fi
+
+    # Args extra del config: se agregan al final para que el último -D gane.
+    if [[ -n "${NHOPKG_MESON_ARGS:-}" ]]; then
+        local extra=()
+        read -ra extra <<< "$NHOPKG_MESON_ARGS"
+        recipe+=("${extra[@]}")
     fi
 
     NHOPKG_RECIPE=("${recipe[@]}")
@@ -173,32 +219,50 @@ nhopkg_clone() {
     fi
 }
 
-# nhopkg se construye SIEMPRE desde fuente en el host con el prefix estándar
-# (/usr, /etc, /var) y se instala de una sola vez en el target vía DESTDIR.
-# Ese único árbol, ya dentro de $LFS, cumple dos roles:
-#   - nhopkg final del sistema: rutas horneadas correctas (/usr, /etc, /var).
-#   - driver del host durante el bootstrap: se ejecuta desde $LFS exportando
-#     por env sus rutas (libs, conf) apuntando dentro de $LFS, gracias a que
-#   nhopkg respeta NHOPKG_LIB, NHOPKG_UDEP_LIB, NHOPKG_DOWNLOAD_LIB y
-#   NHOPKG_CRYPTO_LIB por entorno. El PATH privado de BusyBox ya no se antepone
-#   al del host (nhopkg lo aplica solo dentro del chroot, en los hooks); en el
-#   host los applets se invocan por ruta absoluta vía NHOPKG_BB_DIR.
-# Se reconstruye si cambian el --libc o el estado de BusyBox
-# (marcador .libc-$LIBC-bb{yes,no}).
-# Con --host-nhopkg (o NB_HOST_NHOPKG=1) no se construye nada: el nhopkg
-# instalado en el host se usa tal cual como driver (ver nhopkg_prepare).
+# nhopkg se construye desde fuente solo si HOST_NHOPKG=0: un único árbol con
+# prefix estándar (/usr, /etc, /var) instalado en $LFS vía DESTDIR. Ese árbol
+# es a la vez el nhopkg final del target y el driver del host (rutas por env).
+# El marker depende del hash de la receta, así que cambios de libc, BusyBox,
+# repo-version o NHOPKG_MESON_ARGS fuerzan un rebuild.
+# Con --host-nhopkg no se construye nada: lo provee neonatox-live-boot.
+nhopkg_recipe_marker() {
+    local digest
+    if command -v sha256sum >/dev/null 2>&1; then
+        digest=$(printf '%s\n' "${NHOPKG_RECIPE[@]}" | sha256sum | cut -c1-12)
+    else
+        digest=$(printf '%s\n' "${NHOPKG_RECIPE[@]}" | cksum | cut -d' ' -f1)
+    fi
+    echo "$LFS/etc/nhopkg/.recipe-$digest"
+}
+
+# Aplica NHOPKG_CONF_OVERRIDES al final de la conf del target. Se reemplaza el
+# bloque en cada run para que el config siga siendo mandatorio en re-runs.
+nhopkg_apply_target_conf_overrides() {
+    local conf="$LFS/etc/nhopkg/nhopkg.conf"
+    [[ -f "$conf" ]] || return 0
+    sed -i '/^# BEGIN neonatox-bootstrap overrides$/,/^# END neonatox-bootstrap overrides$/d' "$conf"
+    [[ -z "${NHOPKG_CONF_OVERRIDES:-}" ]] && return 0
+    {
+        echo "# BEGIN neonatox-bootstrap overrides"
+        printf '%s\n' "$NHOPKG_CONF_OVERRIDES"
+        echo "# END neonatox-bootstrap overrides"
+    } >> "$conf"
+}
+
 nhopkg_build() {
     [[ "$HOST_NHOPKG" == "1" ]] && return 0
     local bb="no"
     [[ "$BUSYBOX" == "1" ]] && bb="yes"
-    local marker="$LFS/etc/nhopkg/.libc-$LIBC-bb$bb"
+    nhopkg_probe_recipe
+    local marker
+    marker=$(nhopkg_recipe_marker)
     if [[ -x "$LFS/usr/bin/nhopkg" && -f "$marker" ]]; then
+        nhopkg_apply_target_conf_overrides
         return 0
     fi
-    nhopkg_probe_recipe
     nhopkg_require_build_tools
     nhopkg_clone
-    rm -f "$LFS"/etc/nhopkg/.libc-* 2>/dev/null || true
+    rm -f "$LFS"/etc/nhopkg/.recipe-* "$LFS"/etc/nhopkg/.libc-* 2>/dev/null || true
     echo "=== [core] Construyendo e instalando nhopkg ($LIBC, busybox=$bb) en $LFS ==="
     pushd /tmp/nhopkg >/dev/null || exit 1
     rm -rf build
@@ -210,32 +274,82 @@ nhopkg_build() {
     DESTDIR="$LFS" ninja -C build install
     popd >/dev/null || exit 1
     touch "$marker"
+    nhopkg_apply_target_conf_overrides
+}
+
+# En netinstall el live provee nhopkg, zstd y BusyBox. Validar las tools que
+# nhopkg invoca "desnudas" para fallar temprano con un mensaje claro.
+nhopkg_preflight_host() {
+    local tool missing=0
+    for tool in nhopkg zstd tar sha256sum; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "Error: falta '$tool' en el PATH para usar el nhopkg del host." >&2
+            echo "       neonatox-live-boot debe proveerlo (zstd no es applet de BusyBox)." >&2
+            missing=1
+        fi
+    done
+    if ! command -v wget >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
+        echo "Error: falta wget o curl en el PATH para usar el nhopkg del host." >&2
+        missing=1
+    fi
+    [[ "$missing" == "0" ]] || exit 1
+}
+
+# Config del host: NB_NHOPKG_CONF o NHOPKG_CONF del entorno/config. Si hay
+# overrides, se copia a un temporal y se le agrega el bloque para no tocar
+# la conf del live. Se limpia en cleanup_all().
+nhopkg_host_conf_prepare() {
+    # El nhopkg del live usa sus propias libs: no heredar rutas de un build
+    # previo apuntando a otro $LFS.
+    unset NHOPKG_LIB NHOPKG_UDEP_LIB NHOPKG_DOWNLOAD_LIB NHOPKG_CRYPTO_LIB
+    local src="${NB_NHOPKG_CONF:-${NHOPKG_CONF:-}}"
+    if [[ -z "$src" && -n "${NHOPKG_CONF_OVERRIDES:-}" ]]; then
+        src="/etc/nhopkg/nhopkg.conf"
+    fi
+    if [[ -n "$src" ]]; then
+        [[ -r "$src" ]] || {
+            echo "Error: no se puede leer la conf de nhopkg: $src" >&2
+            exit 1
+        }
+        if [[ -n "${NHOPKG_CONF_OVERRIDES:-}" ]]; then
+            NHOPKG_HOST_TMP_CONF="${TMPDIR:-/tmp}/neonatox-bootstrap-nhopkg.conf.$$"
+            cp "$src" "$NHOPKG_HOST_TMP_CONF"
+            {
+                echo "# BEGIN neonatox-bootstrap overrides"
+                printf '%s\n' "$NHOPKG_CONF_OVERRIDES"
+                echo "# END neonatox-bootstrap overrides"
+            } >> "$NHOPKG_HOST_TMP_CONF"
+            export NHOPKG_CONF="$NHOPKG_HOST_TMP_CONF"
+        else
+            export NHOPKG_CONF="$src"
+        fi
+    else
+        unset NHOPKG_CONF
+    fi
+
+    if [[ "${NHOPKG_USE_BUSYBOX:-no}" == "yes" ]]; then
+        [[ -n "${NB_NHOPKG_BB_DIR:-}" ]] && export NHOPKG_BB_DIR="$NB_NHOPKG_BB_DIR"
+        [[ -n "${NB_NHOPKG_BB_SETUP:-}" ]] && export NHOPKG_BB_SETUP="$NB_NHOPKG_BB_SETUP"
+    else
+        unset NHOPKG_BB_DIR NHOPKG_BB_SETUP
+    fi
 }
 
 # Prepara el entorno del host para usar el nhopkg del target como driver
 # operando sobre --root $LFS (exporta conf y libs apuntando a $LFS).
-# El driver se invoca por ruta absoluta: el bin del target NO se expone al
-# PATH del host (§ abajo). Desactiva gettext (no se asume que el host lo tenga).
-# Con --host-nhopkg se usa el nhopkg del host con su propia config horneada:
-# sin overrides hacia $LFS y sin BusyBox propio.
+# El driver se invoca por ruta absoluta: el bin del target NO se expone al PATH.
 nhopkg_prepare() {
-    # gettext puede faltar en el host: el driver imprime los mensajes fuente
-    # sin depender de él. Aplica a ambos modos (host y árbol del target).
-    export NHOPKG_GETTEXT="no"
+    # Configurable desde neonatox-bootstrap.conf; default no (sin gettext).
+    export NHOPKG_GETTEXT="${NHOPKG_GETTEXT:-no}"
+
     if [[ "$HOST_NHOPKG" == "1" ]]; then
-        unset NHOPKG_CONF NHOPKG_LIB NHOPKG_UDEP_LIB NHOPKG_DOWNLOAD_LIB \
-              NHOPKG_CRYPTO_LIB NHOPKG_BB_DIR NHOPKG_BB_SETUP
+        nhopkg_preflight_host
+        nhopkg_host_conf_prepare
         echo "  [ok] nhopkg del host ($(command -v nhopkg)) ($LIBC)"
         return 0
     fi
     nhopkg_build
 
-    # El bin del target NUNCA va al PATH del host: si el target tiene otra libc
-    # (p.ej. glibc sobre host musl) sus binarios dinámicos no son ejecutables y
-    # envenenan el driver y la validación del PATH privado de BusyBox (readlink
-    # falla y el PATH privado queda desactivado). El driver se alcanza por ruta
-    # absoluta; en el host solo corren tools del host o applets estáticos, y los
-    # binarios del target se ejecutan únicamente dentro del chroot.
     nhopkg() { "$LFS/usr/bin/nhopkg" "$@"; }
 
     export NHOPKG_CONF="$LFS/etc/nhopkg/nhopkg.conf"
@@ -245,12 +359,8 @@ nhopkg_prepare() {
     export NHOPKG_CRYPTO_LIB="$LFS/usr/lib/nhopkg/libnhopkg_crypto"
 
     if [[ "$BUSYBOX" == "1" ]]; then
-        # nhopkg NO antepone su PATH privado de BusyBox al del host: las tools
-        # del host (tar, sed, awk...) deben seguir siendo las suyas. El PATH
-        # privado se aplica solo dentro del chroot, y lo inyecta nhopkg en cada
-        # hook de paquete. Aquí solo se le indica la ruta para que el proceso
-        # del host pueda invocar los applets por ruta absoluta (descargas wget,
-        # hashes, find) cuando falte la tool del host.
+        # El PATH privado solo se inyecta dentro del chroot (hooks de paquete).
+        # En el host los applets se invocan por ruta absoluta cuando faltan.
         if [[ -x "$LFS/usr/lib/nhopkg/bin/busybox" ]]; then
             NHOPKG_BB_DIR="$LFS/usr/lib/nhopkg/bin" \
                 "$LFS/usr/lib/nhopkg/nhopkg-bb-setup" --regenerate >/dev/null 2>&1 || true
@@ -298,6 +408,7 @@ requiere_core() {
 cleanup_all() {
     chroot_cleanup
     rm -rf /tmp/nhopkg /tmp/nhopkg.zip 2>/dev/null || true
+    rm -f "${NHOPKG_HOST_TMP_CONF:-}" 2>/dev/null || true
 }
 trap cleanup_all EXIT INT TERM
 
@@ -688,8 +799,10 @@ do_chroot() {
 #  User creation
 ##################################################
 cmd_user() {
-    local USERNAME="" FULLNAME="" GROUPS="users" SHELL="/bin/bash" PASSWORD=""
-    local NO_CREATE_HOME="" UID_SPEC="" GID_SPEC=""
+    local USERNAME="${NB_USER_USERNAME:-}" FULLNAME="${NB_USER_FULLNAME:-}"
+    local GROUPS="${NB_USER_GROUPS:-users}" SHELL="${NB_USER_SHELL:-/bin/bash}"
+    local PASSWORD="${NB_USER_PASSWORD:-}"
+    local NO_CREATE_HOME="${NB_USER_NO_CREATE_HOME:-}" UID_SPEC="${NB_USER_UID:-}" GID_SPEC="${NB_USER_GID:-}"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -776,7 +889,10 @@ EOF
 #  GRUB installation
 ##################################################
 cmd_grub() {
-    local DEVICE="" EFI="" EFI_SET="" EFI_DIR="/boot" REINSTALL=""
+    local DEVICE="${NB_GRUB_DEVICE:-}" EFI="${NB_GRUB_EFI:-}"
+    local EFI_SET="" EFI_DIR="${NB_GRUB_EFI_DIR:-/boot}" REINSTALL=""
+    [[ -n "$EFI" ]] && EFI_SET=1
+    [[ -n "${NB_GRUB_REINSTALL:-}" ]] && REINSTALL="--reinstall"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in

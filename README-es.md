@@ -11,50 +11,83 @@ una distribución Linux desde cero, en el sistema de archivos destino.
 Se ejecuta desde cualquier distro hospedera —incluida la propia NeonatoX
 (live-boot, netinstall)—: crea la jerarquía del sistema, instala el
 gestor de paquetes `nhopkg`, genera la configuración base y despliega los
-entornos de escritorio KDE / GNOME / XFCE.
+entornos de escritorio KDE / GNOME / XFCE. El target es NeonatoX `n27`
+("Rolling Gatiste"), tanto para glibc como para musl.
+
+## Instalación
+
+Se puede ejecutar desde el source tree o instalar en `/usr` + `/etc` con
+meson (la instalación nunca toca el host: `LFS=/` sigue prohibido):
+
+```bash
+meson setup build --prefix=/usr --sysconfdir=/etc
+ninja -C build
+sudo ninja -C build install
+```
+
+Instala:
+
+| Ruta | Contenido |
+|------|-----------|
+| `/usr/bin/neonatox-bootstrap` | ejecutable |
+| `/etc/neonatox-bootstrap.conf` | config de ejemplo (perfil netinstall activo) |
+| `/usr/share/neonatox-bootstrap/data` | configuración estática del target |
+| `/usr/share/neonatox-bootstrap/packs` | listas de paquetes |
+
+El mismo `neonatox-bootstrap.conf` se lee desde la raíz del source tree.
+Precedencia: **CLI > archivo de config > entorno > defaults**. El config se
+busca en `-c/--config` → `NB_CONFIG` → `/etc/neonatox-bootstrap.conf`
+(instalado) o `./neonatox-bootstrap.conf` (source tree).
 
 ## Uso rápido
 
 ```bash
-sudo ./neonatox-bootstrap -L /mnt core    # sistema base (perfil glibc)
-sudo ./neonatox-bootstrap -L /mnt kde     # KDE (host → chroot)
+sudo neonatox-bootstrap -L /mnt core      # sistema base (perfil glibc)
+sudo neonatox-bootstrap -L /mnt kde       # KDE (host → chroot)
 ```
 
-Ejemplos con las características nuevas (`--libc` y nhopkg al vuelo):
+Ejemplos con las características nuevas (`--libc` y selección de driver de nhopkg):
 
 ```bash
 # Sistema base que apunta a los repos musl (n27/x86_64-musl)
-sudo ./neonatox-bootstrap --libc musl -L /mnt core
+sudo neonatox-bootstrap --libc musl -L /mnt core
 
 # Escritorio GNOME sobre un target musl
-sudo ./neonatox-bootstrap --libc musl -L /mnt gnome
+sudo neonatox-bootstrap --libc musl -L /mnt gnome
 
-# nhopkg se construye siempre (git+meson+ninja) como un único árbol
-# con el prefix estándar (/usr /etc /var), instalado en el target vía
-# DESTDIR; sirve de driver del host (libs resueltas por env hacia el
-# interior de $LFS) y de nhopkg final del sistema. Si el host no tiene
-# alguna tool, la receta habilita BusyBox estático.
-sudo ./neonatox-bootstrap -L /mnt core
+# Perfil netinstall (activo en el config incluido): reutiliza el nhopkg del
+# neonatox-live-boot. Sin clone, sin git/meson/ninja y sin estáticos.
+# zstd y BusyBox los provee la imagen live.
+sudo neonatox-bootstrap -L /mnt core
 
-# Hosts que ya traen nhopkg (NeonatoX live/netinstall, otras distros):
-# se reutiliza como driver y se salta la construcción (sin git/meson/ninja).
-sudo ./neonatox-bootstrap --host-nhopkg -L /mnt core
-sudo NB_HOST_NHOPKG=1 ./neonatox-bootstrap -L /mnt core   # ídem vía env
+# Lo mismo, de forma explícita / vía entorno:
+sudo neonatox-bootstrap --host-nhopkg -L /mnt core
+sudo NB_HOST_NHOPKG=1 neonatox-bootstrap -L /mnt core
+
+# Modo build: si el config fija HOST_NHOPKG=0, se genera un único árbol
+# con el prefix estándar (/usr /etc /var) instalado en el target vía
+# DESTDIR; sirve de driver del host y de nhopkg final. BusyBox estático
+# está disponible en esta rama (PATH privado solo dentro del chroot).
+sudo HOST_NHOPKG=0 neonatox-bootstrap -L /mnt core
+
+# Archivo de configuración alternativo:
+sudo neonatox-bootstrap -c /etc/neonatox-bootstrap.conf -L /mnt core
 ```
 
 ### Argumentos
 
 | Opción | Default | Descripción |
 |--------|---------|-------------|
-| `-L, --lfs <dir>` | `$LFS` o `/mnt` | Directorio raíz de destino |
+| `-L, --lfs <dir>` | `$LFS` o `/mnt` | Directorio raíz de destino (nunca `/`) |
+| `-c, --config <archivo>` | `/etc/neonatox-bootstrap.conf` | Archivo de configuración (env `NB_CONFIG`) |
 | `--hostname <nombre>` | auto (DMI+random) | Nombre del equipo |
 | `--device <disp>` | auto-detect | Dispositivo para fstab |
 | `--uuid <uuid>` | auto-detect | UUID para fstab |
 | `--fstype <tipo>` | auto-detect | Tipo de sistema de archivos |
 | `-z, --timezone <zona>` | host o `America/Caracas` | Zona horaria |
-| `-l, --locale <locale>` | `es_US.UTF-8` | Locale del sistema |
-| `--libc {glibc\|musl}` | `glibc` | Perfil de libc del target (receta de nhopkg) |
-| `--host-nhopkg` | — | Reutiliza el nhopkg del host como driver (salta la build; env `NB_HOST_NHOPKG=1`) |
+| `-l, --locale <locale>` | `en_US.UTF-8` | Locale del sistema |
+| `--libc {glibc\|musl}` | `glibc` | Perfil de libc del target (repos `n27` para ambos) |
+| `--host-nhopkg` | — | Reutiliza el nhopkg del host como driver (ya es el default del config incluido; env `NB_HOST_NHOPKG=1`) |
 | `--skip-sentinel` | — | No exige el sentinel de `core` para `chroot`/`user`/`grub` (env `NB_SKIP_SENTINEL=1`) |
 | `--no-cleanup` | — | Salta limpieza post-instalación |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Listas de paquetes |
@@ -75,6 +108,8 @@ sudo NB_HOST_NHOPKG=1 ./neonatox-bootstrap -L /mnt core   # ídem vía env
 
 ```
 neonatox-bootstrap          # ejecutable principal (bash)
+neonatox-bootstrap.conf     # config de ejemplo (perfil netinstall activo)
+meson.build                 # instalación en /usr + /etc
 bootstrap/
   data/etc/                 # archivos de configuración estáticos
     {passwd,group,profile,bashrc,os-release,inputrc,shells,...}
@@ -89,38 +124,33 @@ bootstrap/
     gnome / gnome-extra     # GNOME core y apps
     xfce / xfce-extra       # XFCE4 y apps
 AGENTS.md                   # guía: uso, arquitectura y flujo paso a paso
+README.md                   # documentación pública (inglés)
 ```
 
 ## Requisitos
 
 - Linux con `chroot`, `mount --bind`
 - `sudo` para `blkid` y `mount`
-- Conexión a internet para descargar nhopkg y paquetes
-- **nhopkg se construye siempre** — el del sistema **no se usa**: su
-  config corresponde al flavor del host, no al del target. Se genera **un
-  único árbol** (`git`, `meson` y `ninja` requeridos) con la receta del
-  `--libc` elegido, instalado en `$LFS` vía `DESTDIR` con el prefix
-  estándar (`--prefix=/usr --sysconfdir=/etc --localstatedir=/var`):
-  1. Es el **driver del host** durante el bootstrap — se invoca por ruta
-     absoluta (el `/usr/bin` del target **no** se pone en el `PATH` del
-     host), con las libs y la conf resueltas por env (`NHOPKG_CONF`,
-     `NHOPKG_LIB`, `NHOPKG_UDEP_LIB`, `NHOPKG_DOWNLOAD_LIB`,
-     `NHOPKG_CRYPTO_LIB` y `NHOPKG_GETTEXT=no`) apuntando al interior de
-     `$LFS`, así opera sobre `--root $LFS` mientras en el host solo corren
-     tools del host o applets estáticos.
-  2. Es el **nhopkg final del sistema** — las rutas horneadas
-     `/usr`/`/etc`/`/var` son las correctas en boot, sustituyendo al
-     paquete `nhopkg`.
-   Si falta alguna tool en el host, la receta activa BusyBox estático
-   automáticamente.
-- **`--host-nhopkg`** (o `NB_HOST_NHOPKG=1`) invierte eso: se reutiliza
-  el `nhopkg` ya presente en el host tal cual — sin clone, sin
-  `meson`/`ninja`, sin árbol `DESTDIR` y con la config/BusyBox propias del
-  host (sin overrides `NHOPKG_*` hacia `$LFS`). El nhopkg final del
-  sistema se instala entonces como paquete normal
-  (`nhopkg -RS nhopkg --no-check-deps`) durante `core`. Asume que los
-  repos del host coinciden con el perfil `--libc` del target (mismo
-  flavor), como ocurre en NeonatoX live-boot / netinstall.
+- Conexión a internet para descargar los paquetes
+- **Perfil netinstall (default en el config incluido)**: `HOST_NHOPKG=1`,
+  `NHOPKG_GETTEXT=no` y `NHOPKG_USE_BUSYBOX=no`. `neonatox-live-boot`
+  provee `nhopkg`, `zstd` y BusyBox; bootstrap no compila ni descarga
+  estáticos. Un preflight valida `nhopkg`, `zstd`, `tar`, `sha256sum` y
+  `wget`/`curl` al arrancar (`zstd` es llamado directamente por nhopkg y
+  **no es applet de BusyBox**). `NB_NHOPKG_CONF` selecciona la conf del
+  live y `NHOPKG_CONF_OVERRIDES` agrega ajustes a una copia temporal.
+  El nhopkg final del target se instala como paquete
+  (`nhopkg -RS nhopkg --no-check-deps`) durante `core`.
+- **Modo build** (`HOST_NHOPKG=0` en el config): se genera un **único
+  árbol** (`git`, `meson` y `ninja` requeridos) con la receta del `--libc`
+  (`n27` para ambos), instalado en `$LFS` vía `DESTDIR` con el prefix
+  estándar (`--prefix=/usr --sysconfdir=/etc --localstatedir=/var`). Sirve
+  de driver del host (por ruta absoluta, con libs/conf hacia `$LFS`) y de
+  nhopkg final del sistema. El marker de rebuild es un hash de toda la
+  receta (`.recipe-<hash>`), así que cambios de libc, BusyBox,
+  `repo-version` o `NHOPKG_MESON_ARGS` fuerzan reconstrucción. BusyBox
+  estático está disponible en este modo (PATH privado solo en el chroot);
+  `--no-busybox` lo desactiva.
 
 ## Flujo
 
