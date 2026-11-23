@@ -1,6 +1,6 @@
 project(
   'neonatox-bootstrap',
-  version: '0.2.0',
+  version: '0.3.0',
   license: 'GPL-3.0-or-later',
   meson_version: '>= 0.55.0',
 )

@@ -44,6 +44,9 @@ busca en `-c/--config` → `NB_CONFIG` → `/etc/neonatox-bootstrap.conf`
 ```bash
 sudo neonatox-bootstrap -L /mnt core      # sistema base (perfil glibc)
 sudo neonatox-bootstrap -L /mnt kde       # KDE (host → chroot)
+
+# Solo el esqueleto del sysroot (layout musl), sin paquetes ni config generada:
+sudo neonatox-bootstrap -L /mnt --create-sysroot musl
 ```
 
 Ejemplos con las características nuevas (`--libc` y selección de driver de nhopkg):
@@ -72,6 +75,14 @@ sudo HOST_NHOPKG=0 neonatox-bootstrap -L /mnt core
 
 # Archivo de configuración alternativo:
 sudo neonatox-bootstrap -c /etc/neonatox-bootstrap.conf -L /mnt core
+
+# Entrada root explícita en fstab (sin swap ni entrada EFI):
+sudo neonatox-bootstrap -L /mnt --device /dev/sda2 --fstype ext4 \
+    --uuid 1234-abcd --root-opts noatime --root-passno 1 --swap none \
+    --no-efi-entry core
+
+# Dejar intacto un /etc/fstab existente:
+sudo neonatox-bootstrap -L /mnt --no-fstab core
 ```
 
 ### Argumentos
@@ -80,17 +91,31 @@ sudo neonatox-bootstrap -c /etc/neonatox-bootstrap.conf -L /mnt core
 |--------|---------|-------------|
 | `-L, --lfs <dir>` | `$LFS` o `/mnt` | Directorio raíz de destino (nunca `/`) |
 | `-c, --config <archivo>` | `/etc/neonatox-bootstrap.conf` | Archivo de configuración (env `NB_CONFIG`) |
+| `--create-sysroot {glibc\|musl}` | — | Crea **solo** la jerarquía de directorios y sale (fija `LIBC`; sin fstab, paquetes ni sentinels) |
 | `--hostname <nombre>` | auto (DMI+random) | Nombre del equipo |
-| `--device <disp>` | auto-detect | Dispositivo para fstab |
-| `--uuid <uuid>` | auto-detect | UUID para fstab |
-| `--fstype <tipo>` | auto-detect | Tipo de sistema de archivos |
+| `--device <disp>` | `findmnt`/`df` | Dispositivo del root para fstab (debe ser block device) |
+| `--uuid <uuid>` | `blkid` | UUID del root para fstab |
+| `--fstype <tipo>` | `blkid` | Tipo de FS del root **escrito en fstab** (bootstrap nunca ejecuta `mkfs`) |
+| `--subvol <nombre>` | detectado de `findmnt` | Subvolumen btrfs del root |
+| `--root-opts <opts>` | `compress=zstd:3,noatime[,subvol=…]` / `defaults` | Reemplaza las opciones de montaje del root literalmente |
+| `--root-passno <0\|1\|2>` | `0` (btrfs), `1` (otros) | Campo `pass` de la entrada root (dump sigue `0`) |
+| `--swap auto\|none\|<UUID>` | `auto` | Entrada swap en fstab |
+| `--efi-uuid <uuid>` | `blkid` | UUID de la partición EFI para fstab |
+| `--efi-mount <dir>` | detectado o `/boot` | Punto de montaje EFI en fstab |
+| `--no-efi-entry` | — | Omite la entrada EFI autodetectada |
+| `--no-fstab` | — | No genera `/etc/fstab` (ni detecta UUID/FS/swap/EFI) |
 | `-z, --timezone <zona>` | host o `America/Caracas` | Zona horaria |
 | `-l, --locale <locale>` | `en_US.UTF-8` | Locale del sistema |
 | `--libc {glibc\|musl}` | `glibc` | Perfil de libc del target (repos `n27` para ambos) |
+| `--no-busybox` | — | Construye nhopkg sin BusyBox estático (solo modo build) |
 | `--host-nhopkg` | — | Reutiliza el nhopkg del host como driver (ya es el default del config incluido; env `NB_HOST_NHOPKG=1`) |
 | `--skip-sentinel` | — | No exige el sentinel de `core` para `chroot`/`user`/`grub` (env `NB_SKIP_SENTINEL=1`) |
 | `--no-cleanup` | — | Salta limpieza post-instalación |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Listas de paquetes |
+
+`--create-sysroot` es un modo propio: no se combina con otros comandos y no
+exige `nhopkg` en el `PATH` del host. El particionado, formateo y montaje del
+destino siguen siendo responsabilidad de quien llama al script.
 
 ### Comandos
 

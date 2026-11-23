@@ -78,10 +78,19 @@ El config se busca en `-c/--config` → `NB_CONFIG` → `/etc/neonatox-bootstrap
 |--------|---------|-------------|
 | `-L, --lfs <dir>` | `$LFS` o `/mnt` | Directorio raíz de destino (nunca `/`) |
 | `-c, --config <archivo>` | `/etc/neonatox-bootstrap.conf` | Archivo de configuración (env `NB_CONFIG`) |
+| `--create-sysroot {glibc\|musl}` | — | Modo propio: crea solo la jerarquía y sale (fija `LIBC`; sin fstab/paquetes/sentinels) |
 | `--hostname <nombre>` | auto (DMI+random) | Nombre del equipo |
-| `--device <disp>` | auto-detect | Dispositivo para fstab |
-| `--uuid <uuid>` | auto-detect | UUID para fstab |
-| `--fstype <tipo>` | auto-detect | Tipo de sistema de archivos |
+| `--device <disp>` | `findmnt`/`df` | Dispositivo del root para fstab (debe ser block device) |
+| `--uuid <uuid>` | `blkid` | UUID del root para fstab |
+| `--fstype <tipo>` | `blkid` | Tipo de FS del root, solo se escribe en fstab (nunca llama a `mkfs`) |
+| `--subvol <nombre>` | detectado de `findmnt` | Subvolumen btrfs del root |
+| `--root-opts <opts>` | `compress=zstd:3,noatime[,subvol=…]` / `defaults` | Reemplaza las opciones de montaje del root literalmente |
+| `--root-passno <0\|1\|2>` | `0` (btrfs), `1` (otros) | Campo `pass` de la entrada root (dump queda `0`) |
+| `--swap auto\|none\|<UUID>` | `auto` | Entrada swap en fstab |
+| `--efi-uuid <uuid>` | `blkid` | UUID de la partición EFI para fstab |
+| `--efi-mount <dir>` | detectado o `/boot` | Punto de montaje EFI en fstab |
+| `--no-efi-entry` | — | Omite la entrada EFI autodetectada |
+| `--no-fstab` | — | No genera `/etc/fstab` (ni detecta UUID/FS/swap/EFI) |
 | `-z, --timezone <zona>` | host o `America/Caracas` | Zona horaria |
 | `-l, --locale <locale>` | `en_US.UTF-8` | Locale del sistema |
 | `--libc {glibc\|musl}` | `glibc` | Perfil de libc del target (receta de nhopkg temporal) |
@@ -93,6 +102,12 @@ El config se busca en `-c/--config` → `NB_CONFIG` → `/etc/neonatox-bootstrap
 | `-h, --help` | — | Muestra la ayuda |
 | `-v, --version` | — | Muestra la versión |
 
+**Modo `--create-sysroot`**: no admite combinarse con `core`/DE/`user`/`grub`/
+`chroot`, no exige `nhopkg` en el host y tampoco crea `.core-installed`.
+El particionado, formateo y montaje previos siguen siendo responsabilidad del
+usuario. La jerarquía la genera `create_sysroot()`, la misma función que usa
+`core` como primer paso.
+
 ### Ejemplos
 
 ```bash
@@ -100,6 +115,8 @@ sudo ./neonatox-bootstrap -L /mnt core                 # sistema base (glibc)
 sudo ./neonatox-bootstrap -L /mnt kde                  # KDE (host → chroot)
 sudo ./neonatox-bootstrap --libc musl -L /mnt core     # target musl (n27/x86_64-musl)
 sudo ./neonatox-bootstrap --libc musl -L /mnt gnome    # GNOME sobre target musl
+sudo ./neonatox-bootstrap -L /mnt --create-sysroot musl # solo jerarquía (layout musl)
+sudo ./neonatox-bootstrap -L /mnt --no-fstab core      # no tocar /etc/fstab
 sudo ./neonatox-bootstrap user --username neonatox -p <pass>
 sudo ./neonatox-bootstrap grub --efi -L /mnt
 
@@ -113,9 +130,11 @@ sudo neonatox-bootstrap -c /etc/neonatox-bootstrap.conf -L /mnt core
 ## Arquitectura
 
 - **`core`** crea la jerarquía de directorios, copia `bootstrap/data/etc/*`,
-  genera la config dinámica (`fstab`, `hostname`, `machine-id`, timezone),
-  puebla la BD de nhopkg, construye e instala nhopkg en el target y
-  despliega los packs base/base-extra (más `grub`).
+  genera la config dinámica (`fstab` configurable o ausente con `--no-fstab`,
+  `hostname`, `machine-id`, timezone, `locale.conf`), puebla la BD de nhopkg,
+  construye o reutiliza nhopkg y despliega los packs base/base-extra (más `grub`).
+- **`--create-sysroot {glibc|musl}`** expone solo la jerarquía como modo
+  independiente: no genera fstab, no instala nada y no crea sentinels.
 - **DE (`kde`/`gnome`/`xfce`)** instalan `desktop-common` + el pack del DE,
   ejecutan `systemctl enable lightdm` en chroot y limpian.
   - GNOME además elimina qt5/qt6; XFCE elimina qt6.
@@ -158,11 +177,15 @@ sudo neonatox-bootstrap -c /etc/neonatox-bootstrap.conf -L /mnt core
 
 ### Flujo: core (host)
 
-1. **Jerarquía de directorios** — `mkdir -pv` y symlinks (`/bin → usr/bin`, etc.)
+1. **Jerarquía de directorios** — `create_sysroot()`: `mkdir -p` y symlinks
+   (`/bin → usr/bin`, `/lib64 → usr/lib`, `lib32` solo con `glibc`). Es la
+   misma función que usa `--create-sysroot` cuando se invoca como modo propio.
 2. **Archivos estáticos** — `cp -a bootstrap/data/etc/. → $LFS/etc/`, `skel/ → $LFS/root/`
 3. **Symlinks del sistema** — `awk → gawk`, `sh → bash`, `mtab`
 4. **Metadata de nhopkg** — `mkdir -p $LFS/var/nhopkg/{cache,files,logs,packages,repo}`
-5. **Archivos dinámicos** — `fstab` (blkid), `hosts`/`hostname` (DMI+random), timezone (host), `machine-id`
+5. **Archivos dinámicos** — `generate_fstab()` (device/UUID/FS/swap/EFI
+   configurables; `--no-fstab` lo omite), `hosts`/`hostname` (DMI+random),
+   timezone (host), `locale.conf` (default `en_US.UTF-8`), `machine-id`
 6. **Paquetes core** — `nhopkg --root $LFS -U` (poblar BD), `-RS busybox` (+ symlink `sh → busybox` para acceso temprano al shell), `-RS base base-extra`, `-RS grub --no-check-deps`
 7. **nhopkg final en el target** — en modo build el tree único ya quedó en `$LFS` con prefix estándar `/usr`/`/etc`/`/var`, sustituyendo al paquete `nhopkg`; en modo host (netinstall) ese árbol no existe, así que va `-RS nhopkg --no-check-deps`
 8. **Sentinel** — se crea `$LFS/var/nhopkg/.core-installed`
@@ -326,7 +349,9 @@ PROPOSALS/                      # propuestas de features futuras
 AGENTS.md                       # este archivo
 README.md                       # documentación pública (inglés)
 README-es.md                    # documentación pública (español)
+NEWS                            # changelog por release
 release-0.2.0.md                # notas de la release 0.2.0
+release-0.3.0.md                # notas de la release 0.3.0
 testing_neoanatox_btrfs         # notas workflow btrfs + systemd-nspawn
 ```
 

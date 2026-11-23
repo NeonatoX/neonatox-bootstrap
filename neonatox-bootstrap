@@ -10,7 +10,7 @@ NB_INSTALLED_SYSCONFDIR='@NB_SYSCONFDIR@'
 [[ "$NB_INSTALLED_SYSCONFDIR" == @*@ ]] && NB_INSTALLED_SYSCONFDIR="$SCRIPT_DIR"
 
 NB_VERSION="@NB_VERSION@"
-[[ "$NB_VERSION" == @*@ ]] && NB_VERSION="v0.1"
+[[ "$NB_VERSION" == @*@ ]] && NB_VERSION="0.3.0"
 
 DATA_DIR="${DATA_DIR:-$NB_INSTALLED_DATADIR/data}"
 PACKS_DIR="${PACKS_DIR:-$NB_INSTALLED_DATADIR/packs}"
@@ -60,10 +60,23 @@ Comandos:
 Opciones globales:
   -L, --lfs <ruta>      Directorio raíz de destino (default: $LFS env o /mnt; NUNCA /)
   -c, --config <archivo> Archivo de configuración (default: neonatox-bootstrap.conf)
+  --create-sysroot {glibc|musl}
+                            Crear SOLO la jerarquía de directorios del target y salir.
+                            Fija LIBC; sin fstab, nhopkg, paquetes ni sentinels.
   --hostname <nombre>   Sobrescribir nombre de host autogenerado
-  --device <disp>       Dispositivo para fstab (detección automática)
-  --uuid <uuid>         UUID para fstab (detección automática)
-  --fstype <tipo>       Tipo de sistema de archivos (detección automática)
+  --device <disp>       Dispositivo del root para fstab (default: findmnt/df)
+  --uuid <uuid>         UUID del root para fstab (default: blkid)
+  --fstype <tipo>       Tipo de FS del root para fstab (default: blkid)
+  --subvol <nombre>     Subvolumen btrfs del root (default: detectado de findmnt)
+  --root-opts <opts>    Opciones de montaje del root; reemplazan el default
+                        (btrfs: compress=zstd:3,noatime[,subvol=…]; otros: defaults)
+  --root-passno <0|1|2> Campo pass del root en fstab (default: 0 btrfs, 1 otros)
+  --swap auto|none|<UUID>
+                        Entrada swap en fstab (default: auto)
+  --efi-uuid <uuid>     UUID de la partición EFI para fstab (default: blkid)
+  --efi-mount <dir>     Punto de montaje EFI en fstab (default: detectado o /boot)
+  --no-efi-entry        No agregar la entrada EFI al fstab
+  --no-fstab            No generar /etc/fstab (ni detectar UUID/FS/swap/EFI)
   -z, --timezone <zona>     Zona horaria (default: detectada del host)
   -l, --locale <locale>     Locale (default: en_US.UTF-8)
   --libc {glibc|musl}       Perfil de libc del target (default: glibc, repo n27)
@@ -76,6 +89,10 @@ Opciones globales:
   --pack-dir <ruta>         Directorio de archivos de paquetes
   -h, --help                Mostrar esta ayuda
   -v, --version             Muestra la version
+
+NOTA: bootstrap NUNCA formatea el dispositivo. --fstype solo se escribe en
+/etc/fstab; el formateo (mkfs) y el montaje previo son responsabilidad del
+usuario o del live-boot.
 
 Variables de entorno:
   LFS                       Directorio raíz de destino (equivale a --lfs)
@@ -97,10 +114,19 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -L|--lfs) LFS="$2"; shift 2 ;;
         -c|--config) shift 2 ;;   # ya se sourceó en el pre-scan
+        --create-sysroot) CREATE_SYSROOT="$2"; shift 2 ;;
         --hostname) NHOSTNAME="$2"; shift 2 ;;
         --device) DEVICE_OVERRIDE="$2"; shift 2 ;;
         --uuid) UUID_OVERRIDE="$2"; shift 2 ;;
         --fstype) FSTYPE_OVERRIDE="$2"; shift 2 ;;
+        --subvol) SUBVOL_OVERRIDE="$2"; shift 2 ;;
+        --root-opts) ROOT_OPTS_OVERRIDE="$2"; shift 2 ;;
+        --root-passno) ROOT_PASSNO="$2"; shift 2 ;;
+        --swap) SWAP_MODE="$2"; shift 2 ;;
+        --efi-uuid) EFI_UUID_OVERRIDE="$2"; shift 2 ;;
+        --efi-mount) EFI_MOUNT_OVERRIDE="$2"; shift 2 ;;
+        --no-efi-entry) NO_EFI_ENTRY=1; shift ;;
+        --no-fstab) SKIP_FSTAB=1; shift ;;
         -z|--timezone) TZONE="$2"; shift 2 ;;
         -l|--locale) LOCALE="$2"; shift 2 ;;
         --libc) LIBC="$2"; shift 2 ;;
@@ -111,24 +137,68 @@ while [[ $# -gt 0 ]]; do
         --pack-dir) PACKS_DIR="$2"; shift 2 ;;
         -h|--help) show_help ;;
         -v|--version) show_ver ;;
-        core|kde|gnome|xfce|chroot|user|grub) MODE="$1"; shift; break ;;
+        core|kde|gnome|xfce|chroot|user|grub)
+            MODE="$1"; MODE_FROM_CLI=1; shift; break ;;
         *) echo "Error: argumento desconocido: $1" >&2; show_help ;;
     esac
 done
 
+# --create-sysroot es un modo propio: fija LIBC y no se combina con comandos.
+if [[ -n "${CREATE_SYSROOT:-}" ]]; then
+    [[ -z "${MODE_FROM_CLI:-}" ]] || {
+        echo "Error: --create-sysroot no se puede combinar con otro comando." >&2
+        exit 1
+    }
+    if [[ -n "${LIBC:-}" && "$LIBC" != "$CREATE_SYSROOT" ]]; then
+        echo "Error: --create-sysroot $CREATE_SYSROOT contradice --libc $LIBC." >&2
+        exit 1
+    fi
+    LIBC="$CREATE_SYSROOT"
+    MODE="sysroot"
+fi
 [[ -z "$MODE" ]] && MODE="core"
 
 LIBC="${LIBC:-glibc}"
+LOCALE="${LOCALE:-en_US.UTF-8}"
+SWAP_MODE="${SWAP_MODE:-auto}"
 BUSYBOX="${BUSYBOX:-1}"
 HOST_NHOPKG="${HOST_NHOPKG:-${NB_HOST_NHOPKG:-0}}"
 SKIP_SENTINEL="${SKIP_SENTINEL:-${NB_SKIP_SENTINEL:-0}}"
 [[ "$LIBC" == "glibc" || "$LIBC" == "musl" ]] || {
-    echo "Error: --libc debe ser 'glibc' o 'musl' (recibido: $LIBC)." >&2
+    echo "Error: --libc/--create-sysroot debe ser 'glibc' o 'musl' (recibido: $LIBC)." >&2
     exit 1
 }
 
+# Validaciones de las opciones que se escriben en /etc/fstab. Se rechazan
+# saltos de línea para no inyectar entradas extra en el heredoc.
+for _opt in DEVICE_OVERRIDE UUID_OVERRIDE FSTYPE_OVERRIDE SUBVOL_OVERRIDE \
+            ROOT_OPTS_OVERRIDE EFI_UUID_OVERRIDE EFI_MOUNT_OVERRIDE; do
+    _val="${!_opt:-}"
+    if [[ "$_val" == *$'\n'* ]]; then
+        echo "Error: $_opt no puede contener saltos de línea." >&2
+        exit 1
+    fi
+done
+[[ "${UUID_OVERRIDE:-}" =~ ^[A-Fa-f0-9-]*$ ]] || {
+    echo "Error: --uuid no es un UUID válido." >&2; exit 1; }
+[[ "${FSTYPE_OVERRIDE:-}" =~ ^[A-Za-z0-9_.-]*$ ]] || {
+    echo "Error: --fstype contiene caracteres inválidos." >&2; exit 1; }
+[[ "${SUBVOL_OVERRIDE:-}" =~ ^[A-Za-z0-9_./@-]*$ ]] || {
+    echo "Error: --subvol contiene caracteres inválidos." >&2; exit 1; }
+[[ "${EFI_UUID_OVERRIDE:-}" =~ ^[A-Fa-f0-9-]*$ ]] || {
+    echo "Error: --efi-uuid no es un UUID válido." >&2; exit 1; }
+[[ -z "${ROOT_PASSNO:-}" || "$ROOT_PASSNO" =~ ^[0-2]$ ]] || {
+    echo "Error: --root-passno debe ser 0, 1 o 2." >&2; exit 1; }
+[[ "$SWAP_MODE" == "auto" || "$SWAP_MODE" == "none" || "$SWAP_MODE" =~ ^[A-Fa-f0-9-]+$ ]] || {
+    echo "Error: --swap debe ser 'auto', 'none' o un UUID." >&2; exit 1; }
+if [[ -n "${DEVICE_OVERRIDE:-}" && ! -b "$DEVICE_OVERRIDE" ]]; then
+    echo "Error: --device '$DEVICE_OVERRIDE' no es un dispositivo de bloque." >&2
+    exit 1
+fi
+
 # Modo nhopkg del host: requiere un nhopkg operativo en el PATH del host.
-if [[ "$HOST_NHOPKG" == "1" ]]; then
+# --create-sysroot no usa nhopkg, así que no exige el driver del live.
+if [[ "$HOST_NHOPKG" == "1" && "$MODE" != "sysroot" ]]; then
     command -v nhopkg >/dev/null 2>&1 || {
         echo "Error: --host-nhopkg/NB_HOST_NHOPKG pide usar el nhopkg del host," >&2
         echo "       pero 'nhopkg' no está en el PATH. Instálelo o quite la opción." >&2
@@ -142,6 +212,12 @@ fi
     echo "Error: LFS apunta a la raíz del sistema host ($LFS). Abortando." >&2
     exit 1
 }
+
+# sysroot solo necesita que LFS exista; no exige mountpoint ni sentinel.
+if [[ "$MODE" == "sysroot" && ! -d "$LFS" ]]; then
+    echo "Error: $LFS no existe. Créelo antes de --create-sysroot." >&2
+    exit 1
+fi
 
 # Verificar que LFS exista y sea un punto de montaje (solo en core)
 if [[ "$MODE" == "core" ]]; then
@@ -493,6 +569,180 @@ detect_efi() {
 }
 
 ##################################################
+#  Sysroot: jerarquía compartida por core y --create-sysroot
+##################################################
+create_sysroot() {
+    echo "=== Creando jerarquía de directorios del sysroot ($LIBC) ==="
+
+    mkdir -p "${LFS}/usr/"{bin,lib}
+    ln -sfn usr/lib "${LFS}/lib64"
+    ln -sfn lib "${LFS}/usr/lib64"
+
+    if [[ "$LIBC" == "glibc" ]]; then
+        mkdir -p "${LFS}/usr/lib32"
+        ln -sfn usr/lib32 "${LFS}/lib32"
+    fi
+
+    # merged-usr
+    ln -sfn usr/bin "${LFS}/bin"
+    ln -sfn usr/bin "${LFS}/sbin"
+    ln -sfn usr/lib "${LFS}/lib"
+    ln -sfn bin "${LFS}/usr/sbin"
+
+    mkdir -p "${LFS}/"{dev,proc,sys,run}
+    mkdir -p "${LFS}/"{boot,home,mnt,opt,srv}
+    mkdir -p "${LFS}/etc/"{opt,sysconfig,skel,profile.d}
+    mkdir -p "${LFS}/etc/"{polkit-1,udev}"/rules.d"
+    mkdir -p "${LFS}/lib/firmware"
+    mkdir -p "${LFS}/media/"{floppy,cdrom}
+    mkdir -p "${LFS}"/usr/{,local/}{include,src}
+    mkdir -p "${LFS}/usr/lib/locale"
+    mkdir -p "${LFS}/usr/local/"{bin,lib,sbin}
+    mkdir -p "${LFS}"/usr/{,local/}share/{color,dict,doc,info,locale,man}
+    mkdir -p "${LFS}"/usr/{,local/}share/{misc,terminfo,zoneinfo}
+    mkdir -p "${LFS}"/usr/{,local/}share/man/man{1..8}
+    mkdir -p "${LFS}/var/"{cache,local,log,mail,opt,spool}
+    mkdir -p "${LFS}/var/lib/"{color,misc,locate}
+    # evitar que enlacen al host con ..
+    ln -sfn ../run "${LFS}/var/run"
+    ln -sfn ../run/lock "${LFS}/var/lock"
+
+    install -d -m 0750 "${LFS}/root"
+    install -d -m 1777 "${LFS}/tmp" "${LFS}/var/tmp"
+}
+
+cmd_sysroot() {
+    echo "=== [sysroot] Preparando jerarquía para $LIBC en $LFS ==="
+    create_sysroot
+    echo "=== [sysroot] Ready (sin fstab, nhopkg, paquetes ni sentinels) ==="
+}
+
+##################################################
+#  fstab — configurable desde la CLI
+##################################################
+generate_fstab() {
+    if [[ -n "${SKIP_FSTAB:-}" ]]; then
+        echo "  [aviso] --no-fstab: no se generará /etc/fstab" >&2
+        return 0
+    fi
+
+    echo "=== [core] Generando archivos dinámicos: fstab ==="
+
+    local DEV="" VOLUME="" UUID="" FSTYPE=""
+    if [[ -n "${DEVICE_OVERRIDE:-}" ]]; then
+        DEV="$DEVICE_OVERRIDE"
+    else
+        if command -v findmnt >/dev/null 2>&1; then
+            DEV="$(findmnt -no SOURCE --target "$LFS" 2>/dev/null | sed 's/\[.*\]//' | tr -d '[:space:]')"
+            VOLUME="$(findmnt -no OPTIONS --target "$LFS" 2>/dev/null | sed -n 's/.*subvol=\([^,]*\).*/\1/p' || true)"
+        fi
+        if [[ -z "$DEV" ]] || [[ ! -b "$DEV" ]]; then
+            DEV="$(df -P "$LFS" | awk 'NR==2{print $1}' | sed 's/\[.*\]//')"
+        fi
+    fi
+    if [[ ! -b "$DEV" ]]; then
+        echo "Error: No se pudo detectar dispositivo válido para $LFS" >&2
+        exit 1
+    fi
+    echo "Dispositivo detectado: $DEV"
+
+    if command -v blkid >/dev/null 2>&1; then
+        UUID="${UUID_OVERRIDE:-$(blkid -o value -s UUID "$DEV" 2>/dev/null)}"
+        FSTYPE="${FSTYPE_OVERRIDE:-$(blkid -o value -s TYPE "$DEV" 2>/dev/null)}"
+        # Fallback a sed parsing si -o value no es soportado (busybox antiguo)
+        if [[ -z "$UUID" ]]; then
+            local BLKID_OUT
+            BLKID_OUT="$(blkid "$DEV" 2>/dev/null || true)"
+            UUID="${UUID_OVERRIDE:-$(echo "$BLKID_OUT" | sed -n 's/.*UUID="\([^"]*\)".*/\1/p')}"
+            FSTYPE="${FSTYPE_OVERRIDE:-$(echo "$BLKID_OUT" | sed -n 's/.*TYPE="\([^"]*\)".*/\1/p')}"
+        fi
+    fi
+    UUID="${UUID:-${UUID_OVERRIDE:-}}"
+    FSTYPE="${FSTYPE:-${FSTYPE_OVERRIDE:-}}"
+    if [[ -z "$UUID" ]]; then
+        echo "Error: No se pudo obtener UUID de $DEV (use --uuid)." >&2
+        exit 1
+    fi
+    if [[ -z "$FSTYPE" ]]; then
+        echo "Error: No se pudo obtener el tipo de FS de $DEV (use --fstype)." >&2
+        exit 1
+    fi
+    echo "UUID: $UUID | Tipo: $FSTYPE"
+
+    local SUBVOL="${SUBVOL_OVERRIDE:-${VOLUME:-}}"
+    if [[ "$FSTYPE" == "btrfs" && -z "$SUBVOL" ]]; then
+        echo "  [aviso] btrfs sin subvolumen detectable: se omite 'subvol=' (use --subvol)." >&2
+    fi
+
+    local MOUNT_OPTS FS_PASS
+    if [[ -n "${ROOT_OPTS_OVERRIDE:-}" ]]; then
+        MOUNT_OPTS="$ROOT_OPTS_OVERRIDE"
+    elif [[ "$FSTYPE" == "btrfs" ]]; then
+        MOUNT_OPTS="compress=zstd:3,noatime"
+        [[ -n "$SUBVOL" ]] && MOUNT_OPTS="$MOUNT_OPTS,subvol=$SUBVOL"
+    else
+        MOUNT_OPTS="defaults"
+    fi
+    if [[ "$FSTYPE" == "btrfs" ]]; then
+        FS_PASS="${ROOT_PASSNO:-0}"
+    else
+        FS_PASS="${ROOT_PASSNO:-1}"
+    fi
+
+    detect_base_disk || true
+
+    # swap
+    local SWAP_ENTRIES=""
+    case "$SWAP_MODE" in
+        none) ;;
+        auto)
+            if [[ -n "$BASE_DISK" && -b "$BASE_DISK" ]] && command -v lsblk >/dev/null 2>&1; then
+                while IFS= read -r PART; do
+                    [[ -z "$PART" || "$PART" == "$(basename "$DEV")" ]] && continue
+                    local PART_DEV="/dev/$PART" SWAP_UUID="" SWAP_TYPE=""
+                    SWAP_UUID=$(blkid -o value -s UUID "$PART_DEV" 2>/dev/null || true)
+                    SWAP_TYPE=$(blkid -o value -s TYPE "$PART_DEV" 2>/dev/null || true)
+                    if [[ "$SWAP_TYPE" == "swap" && -n "$SWAP_UUID" ]]; then
+                        SWAP_ENTRIES="${SWAP_ENTRIES}UUID=${SWAP_UUID}  none  swap  sw  0  0"$'\n'
+                        echo "    [INFO] swap detectado: $PART_DEV ($SWAP_UUID)"
+                    fi
+                done < <(lsblk -ln -o NAME,TYPE "$BASE_DISK" 2>/dev/null | awk '$2=="part"{print $1}')
+            fi
+            ;;
+        *)
+            SWAP_ENTRIES="UUID=${SWAP_MODE}  none  swap  sw  0  0"$'\n'
+            echo "    [INFO] swap explícito: $SWAP_MODE"
+            ;;
+    esac
+
+    # EFI
+    local EFI_ENTRY=""
+    if [[ -z "${NO_EFI_ENTRY:-}" ]]; then
+        local EFI_UUID="${EFI_UUID_OVERRIDE:-}" EFI_MNT="${EFI_MOUNT_OVERRIDE:-}"
+        if [[ -z "$EFI_UUID" || -z "$EFI_MNT" ]]; then
+            detect_efi || true
+        fi
+        if [[ -z "$EFI_UUID" && -n "${EFI_PART:-}" ]] && command -v blkid >/dev/null 2>&1; then
+            EFI_UUID=$(blkid -o value -s UUID "$EFI_PART" 2>/dev/null || true)
+        fi
+        EFI_MNT="${EFI_MNT:-${EFI_DIR:-/boot}}"
+        if [[ -n "$EFI_UUID" ]]; then
+            EFI_ENTRY="UUID=$EFI_UUID  $EFI_MNT  vfat  defaults  0  2"$'\n'
+            echo "    [INFO] entrada EFI agregada al fstab: $EFI_MNT"
+        fi
+    fi
+
+    cat > "${LFS}/etc/fstab" <<EOF
+# Generated by neonatox-bootstrap
+
+${EFI_ENTRY}
+UUID=$UUID  /  $FSTYPE  $MOUNT_OPTS  0  $FS_PASS
+${SWAP_ENTRIES}
+EOF
+    echo "    [INFO] fstab generado"
+}
+
+##################################################
 #  Install base system —  01-base-neonatox.sh
 ##################################################
 install_core() {
@@ -501,43 +751,7 @@ install_core() {
         echo "core ya instalado en $LFS. Saltando." >&2
         return 0
     fi
-    echo "=== [core] Creando jerarquía de directorios ==="
-    
-    mkdir -p ${LFS}/usr/{bin,lib}
-    ln -sf usr/lib ${LFS}/lib64
-    ln -sf lib ${LFS}/usr/lib64
-
-    if [[ "$LIBC" == "glibc" ]]; then
-        mkdir -p ${LFS}/usr/lib32
-        ln -sf usr/lib32 ${LFS}/lib32
-    fi
-
-    # merged-usr
-    ln -sf usr/bin   ${LFS}/bin
-    ln -sf usr/bin   ${LFS}/sbin
-    ln -sf usr/lib   ${LFS}/lib
-    ln -sf bin       ${LFS}/usr/sbin
-
-    mkdir -p ${LFS}/{dev,proc,sys,run}
-    mkdir -p ${LFS}/{boot,home,mnt,opt,srv}
-    mkdir -p ${LFS}/etc/{opt,sysconfig,skel,profile.d}
-    mkdir -p ${LFS}/etc/{polkit-1,udev}/rules.d
-    mkdir -p ${LFS}/lib/firmware
-    mkdir -p ${LFS}/media/{floppy,cdrom}
-    mkdir -p ${LFS}/usr/{,local/}{include,src}
-    mkdir -p ${LFS}/usr/lib/locale
-    mkdir -p ${LFS}/usr/local/{bin,lib,sbin}
-    mkdir -p ${LFS}/usr/{,local/}share/{color,dict,doc,info,locale,man}
-    mkdir -p ${LFS}/usr/{,local/}share/{misc,terminfo,zoneinfo}
-    mkdir -p ${LFS}/usr/{,local/}share/man/man{1..8}
-    mkdir -p ${LFS}/var/{cache,local,log,mail,opt,spool}
-    mkdir -p ${LFS}/var/lib/{color,misc,locate}
-    # evitar que enlacen al host con ..
-    ln -sf ../run ${LFS}/var/run
-    ln -sf ../run/lock ${LFS}/var/lock
-    
-    install -d -m 0750 ${LFS}/root
-    install -d -m 1777 ${LFS}/tmp ${LFS}/var/tmp
+    create_sysroot
 
     echo "=== [core] Copiando archivos de configuración estáticos ==="
     cp -a "$DATA_DIR/etc/." "$LFS/etc/"
@@ -559,80 +773,7 @@ EOF
     mkdir -p ${LFS}/var/nhopkg/{cache,files,logs,packages,repo}
 
     echo "=== [core] Generando archivos dinámicos ==="
-
-    # fstab — detecta dispositivo/UUID/FSTYPE
-    DEV=""
-    if command -v findmnt >/dev/null 2>&1; then
-        DEV="$(findmnt -no SOURCE --target "$LFS" 2>/dev/null | sed 's/\[.*\]//' | tr -d '[:space:]')"
-        VOLUME="$(findmnt -no OPTIONS --target "$LFS" 2>/dev/null | sed -n 's/.*subvol=\([^,]*\).*/\1/p' || true)"
-    fi
-    if [[ -z "$DEV" ]] || [[ ! -b "$DEV" ]]; then
-        DEV="$(df -P "$LFS" | awk 'NR==2{print $1}' | sed 's/\[.*\]//')"
-    fi
-    if [[ ! -b "$DEV" ]]; then
-        echo "Error: No se pudo detectar dispositivo válido para $LFS" >&2
-        exit 1
-    fi
-    echo "Dispositivo detectado: $DEV"
-    if command -v blkid >/dev/null 2>&1; then
-        UUID="${UUID_OVERRIDE:-$(blkid -o value -s UUID "$DEV" 2>/dev/null)}"
-        FSTYPE="${FSTYPE_OVERRIDE:-$(blkid -o value -s TYPE "$DEV" 2>/dev/null)}"
-        # Fallback a sed parsing si -o value no es soportado (busybox antiguo)
-        if [[ -z "$UUID" ]]; then
-            local BLKID_OUT
-            BLKID_OUT="$(blkid "$DEV" 2>/dev/null || true)"
-            UUID="${UUID_OVERRIDE:-$(echo "$BLKID_OUT" | sed -n 's/.*UUID="\([^"]*\)".*/\1/p')}"
-            FSTYPE="${FSTYPE_OVERRIDE:-$(echo "$BLKID_OUT" | sed -n 's/.*TYPE="\([^"]*\)".*/\1/p')}"
-        fi
-    fi
-    if [[ -z "$UUID" ]]; then
-        echo "Error: No se pudo obtener UUID de $DEV" >&2
-        exit 1
-    fi
-    echo "UUID: $UUID | Tipo: $FSTYPE"
-    if [[ "$FSTYPE" == "btrfs" ]]; then
-        MOUNT_OPTS="compress=zstd:3,noatime,subvol=$VOLUME"
-        FS_PASS="0 0"
-    else
-        MOUNT_OPTS="defaults"
-        FS_PASS="0 1"
-    fi
-    # Detectar particiones swap en la misma unidad
-    SWAP_ENTRIES=""
-    detect_base_disk || true
-    if [[ -n "$BASE_DISK" && -b "$BASE_DISK" ]] && command -v lsblk >/dev/null 2>&1; then
-        while IFS= read -r PART; do
-            [[ -z "$PART" || "$PART" == "$(basename "$DEV")" ]] && continue
-            PART_DEV="/dev/$PART"
-            SWAP_UUID=$(blkid -o value -s UUID "$PART_DEV" 2>/dev/null || true)
-            SWAP_TYPE=$(blkid -o value -s TYPE "$PART_DEV" 2>/dev/null || true)
-            if [[ "$SWAP_TYPE" == "swap" && -n "$SWAP_UUID" ]]; then
-                SWAP_ENTRIES="${SWAP_ENTRIES}UUID=${SWAP_UUID}  none  swap  sw  0  0"$'\n'
-                echo "    [INFO] swap detectado: $PART_DEV ($SWAP_UUID)"
-            fi
-        done < <(lsblk -ln -o NAME,TYPE "$BASE_DISK" 2>/dev/null | awk '$2=="part"{print $1}')
-    fi
-
-    # Detectar partición EFI y obtener UUID
-    EFI_ENTRY=""
-    detect_efi || true
-    if [[ -n "$EFI_PART" ]] && command -v blkid >/dev/null 2>&1; then
-        local EFI_UUID
-        EFI_UUID=$(blkid -o value -s UUID "$EFI_PART" 2>/dev/null || true)
-        if [[ -n "$EFI_UUID" ]]; then
-            EFI_ENTRY="UUID=$EFI_UUID  $EFI_DIR  vfat  defaults  0  2"$'\n'
-            echo "    [INFO] entrada EFI agregada al fstab: $EFI_PART → $EFI_DIR"
-        fi
-    fi
-
-    cat > "${LFS}/etc/fstab" <<EOF
-# Generated by neonatox-bootstrap
-
-${EFI_ENTRY}
-UUID=$UUID  /  $FSTYPE  $MOUNT_OPTS  $FS_PASS
-${SWAP_ENTRIES}
-EOF
-    echo "    [INFO] fstab generado"
+    generate_fstab
 
     # hosts / hostname — usa DMI + random
     if [[ -z "${NHOSTNAME:-}" ]]; then
@@ -950,6 +1091,7 @@ EOF
 ##################################################
 case "$MODE" in
     core)   install_core ;;
+    sysroot) cmd_sysroot ;;
     kde)    install_kde ;;
     gnome)  install_gnome ;;
     xfce)   install_xfce ;;

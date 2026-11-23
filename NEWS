@@ -1,3 +1,15 @@
+0.3.0 (2026-11-23)
+--------------------------------
+* feat: --create-sysroot {glibc|musl} crea solo la jerarquía del target y sale
+* feat: args de fstab/root: --subvol, --root-opts, --root-passno, --swap,
+  --efi-uuid, --efi-mount, --no-efi-entry y --no-fstab
+* fix: --device ahora se aplica y valida que sea un dispositivo de bloque
+* fix: btrfs sin subvolumen detectable ya no escribe subvol= vacío
+* fix: --locale tiene un default real (en_US.UTF-8) y crea locale.conf
+* refactor: create_sysroot() y generate_fstab() extraídas de install_core()
+* docs: nuevas opciones en README/README-es/AGENTS y config de ejemplo
+* build: versión del proyecto 0.3.0
+
 0.2.0 (2026-09-22)
 --------------------------------
 * feat: nhopkg al vuelo (standalone) con --libc {glibc|musl} y fallback BusyBox

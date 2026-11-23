@@ -47,6 +47,9 @@ or `./neonatox-bootstrap.conf` (source tree).
 ```bash
 sudo neonatox-bootstrap -L /mnt core      # base system (glibc profile)
 sudo neonatox-bootstrap -L /mnt kde       # KDE (host → chroot)
+
+# Only the sysroot skeleton (musl layout), no packages or generated config:
+sudo neonatox-bootstrap -L /mnt --create-sysroot musl
 ```
 
 Examples with the new features (`--libc` and nhopkg driver selection):
@@ -75,6 +78,14 @@ sudo HOST_NHOPKG=0 neonatox-bootstrap -L /mnt core
 
 # Alternate config file:
 sudo neonatox-bootstrap -c /etc/neonatox-bootstrap.conf -L /mnt core
+
+# Fully explicit root entry in fstab (no swap, no EFI entry):
+sudo neonatox-bootstrap -L /mnt --device /dev/sda2 --fstype ext4 \
+    --uuid 1234-abcd --root-opts noatime --root-passno 1 --swap none \
+    --no-efi-entry core
+
+# Keep an existing /etc/fstab untouched:
+sudo neonatox-bootstrap -L /mnt --no-fstab core
 ```
 
 ### Arguments
@@ -83,10 +94,19 @@ sudo neonatox-bootstrap -c /etc/neonatox-bootstrap.conf -L /mnt core
 |--------|---------|-------------|
 | `-L, --lfs <dir>` | `$LFS` or `/mnt` | Target root directory (never `/`) |
 | `-c, --config <file>` | `/etc/neonatox-bootstrap.conf` | Config file (env `NB_CONFIG`) |
+| `--create-sysroot {glibc\|musl}` | — | Create **only** the target directory tree and exit (sets `LIBC`; no fstab, packages or sentinels) |
 | `--hostname <name>` | auto (DMI+random) | Machine name |
-| `--device <dev>` | auto-detect | Device for fstab |
-| `--uuid <uuid>` | auto-detect | UUID for fstab |
-| `--fstype <type>` | auto-detect | Filesystem type |
+| `--device <dev>` | `findmnt`/`df` | Root device for fstab (must be a block device) |
+| `--uuid <uuid>` | `blkid` | Root UUID for fstab |
+| `--fstype <type>` | `blkid` | Root filesystem type **written in fstab** (bootstrap never runs `mkfs`) |
+| `--subvol <name>` | detected from `findmnt` | btrfs subvolume for the root entry |
+| `--root-opts <opts>` | `compress=zstd:3,noatime[,subvol=…]` / `defaults` | Replace root mount options verbatim |
+| `--root-passno <0\|1\|2>` | `0` (btrfs), `1` (others) | `pass` field of the root entry (dump stays `0`) |
+| `--swap auto\|none\|<UUID>` | `auto` | Swap entry in fstab |
+| `--efi-uuid <uuid>` | `blkid` | EFI partition UUID for fstab |
+| `--efi-mount <dir>` | detected or `/boot` | EFI mount point in fstab |
+| `--no-efi-entry` | — | Omit the auto-detected EFI entry |
+| `--no-fstab` | — | Do not generate `/etc/fstab` (no UUID/FS/swap/EFI detection either) |
 | `-z, --timezone <zone>` | host or `America/Caracas` | Timezone |
 | `-l, --locale <locale>` | `en_US.UTF-8` | System locale |
 | `--libc {glibc\|musl}` | `glibc` | Target libc profile (`n27` repositories for both) |
@@ -95,6 +115,10 @@ sudo neonatox-bootstrap -c /etc/neonatox-bootstrap.conf -L /mnt core
 | `--skip-sentinel` | — | Don't require the `core` sentinel for `chroot`/`user`/`grub` (env `NB_SKIP_SENTINEL=1`) |
 | `--no-cleanup` | — | Skip post-install cleanup |
 | `--pack-dir <dir>` | `bootstrap/packs/` | Package list files |
+
+`--create-sysroot` is a standalone mode: it cannot be combined with another
+command and does not require `nhopkg` in the host `PATH`. Partitioning,
+formatting and mounting the target are still the caller's responsibility.
 
 ### Commands
 
